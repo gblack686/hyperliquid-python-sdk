@@ -1,0 +1,244 @@
+================================================================================
+CRYPTO NEWS & SENTIMENT APIs - INTEGRATION SPECIFICATION
+================================================================================
+Date: 2026-01-30
+Version: 1.0.0
+Cost: $0/month (all free APIs)
+
+================================================================================
+1. IMPLEMENTED SOURCES
+================================================================================
+
+Source              | API Endpoint                              | Auth    | Rate Limit
+--------------------|-------------------------------------------|---------|------------
+CryptoCompare       | min-api.cryptocompare.com/data/v2/news   | None    | 50/min
+Reddit              | old.reddit.com/r/{sub}/hot.json          | None    | 60/min
+CoinGecko           | api.coingecko.com/api/v3                 | None    | 10-30/min
+Fear & Greed        | api.alternative.me/fng                    | None    | Unlimited
+DeFiLlama           | api.llama.fi                              | None    | Unlimited
+
+
+================================================================================
+2. SAMPLE OUTPUTS (Live Data - 2026-01-30)
+================================================================================
+
+CRYPTOCOMPARE NEWS (50+ sources):
+---------------------------------
+[newsbtc] Dogecoin Resistance Level Stalling 402% Move
+[ambcrypto] Bitcoin's 9% volatility surge - more BTC downside?
+[cointelegraph] Nubank wins conditional US approval for national bank
+[cryptopolitan] Aptos price prediction 2026-2032
+[cryptodaily] US Crypto Sites Lost 33% Traffic in Q4 2025
+[cryptopotato] Bitcoin Whale Accumulation Hits Highest Level Since 2024
+[coindesk] Who is Kevin Warsh? Trump's Fed chair nominee
+[forbes] Why Is Bitcoin Down While Gold Rallies?
+
+
+REDDIT r/CryptoCurrency:
+------------------------
+[Score: 1931] It's Been an Honor Trading With Y'all... (MEME)
+[Score: 1358] Crypto Still One Of Most Asymmetrical Bets (PERSPECTIVE)
+[Score: 637] Bitcoin falls to $81K, $1.7B liquidations (UNRELIABLE SOURCE)
+
+
+COINGECKO TRENDING:
+-------------------
+1. ULTIMA - Ultima (Rank #287)
+2. BTC - Bitcoin (Rank #1)
+3. HYPE - Hyperliquid (Rank #24)  <-- Our exchange!
+4. XAUT - Tether Gold (Rank #48)
+5. PENGU - Pudgy Penguins (Rank #141)
+6. PAXG - PAX Gold (Rank #52)
+7. SOL - Solana (Rank #7)
+
+
+FEAR & GREED INDEX (7-day):
+---------------------------
+Today:    16 (Extreme Fear)
+-1 day:   26 (Fear)
+-2 days:  29 (Fear)
+-3 days:  29 (Fear)
+-4 days:  20 (Extreme Fear)
+-5 days:  25 (Extreme Fear)
+-6 days:  25 (Extreme Fear)
+
+
+DEFILLAMA TOP PROTOCOLS:
+------------------------
+1. Binance CEX: $159.33B
+2. Aave V3: $31.60B (Lending)
+3. Lido: $26.23B (Liquid Staking)
+4. OKX: $21.05B (CEX)
+5. Bitfinex: $19.58B (CEX)
+6. Bybit: $17.31B (CEX)
+7. Robinhood: $15.31B (CEX)
+
+
+================================================================================
+3. FILES CREATED
+================================================================================
+
+integrations/news/
+  crypto_news_aggregator.py    Main aggregator module (500+ lines)
+  __init__.py                  Package exports
+
+.claude/commands/
+  news-crypto.md               /news-crypto command
+  news-reddit.md               /news-reddit command
+  news-sentiment.md            /news-sentiment command
+  news-trending.md             /news-trending command
+  news-fear-greed.md           /news-fear-greed command
+  news-defi.md                 /news-defi command
+
+
+================================================================================
+4. AVAILABLE COMMANDS
+================================================================================
+
+Command              | Description
+---------------------|--------------------------------------------------
+/news-crypto         | Get latest crypto news from 50+ sources
+/news-reddit         | Hot posts from r/CryptoCurrency & related subs
+/news-sentiment      | Combined market sentiment (F&G + Reddit + trending)
+/news-trending       | Trending coins from CoinGecko
+/news-fear-greed     | Fear & Greed Index with 7-day history
+/news-defi           | Top DeFi protocols by TVL
+
+
+================================================================================
+5. PYTHON USAGE
+================================================================================
+
+from integrations.news import CryptoNewsAggregator
+
+aggregator = CryptoNewsAggregator()
+
+# Get all news
+news = await aggregator.get_all_news(limit=20)
+for item in news:
+    print(f"[{item.source}] {item.title}")
+
+# Get market sentiment
+sentiment = await aggregator.get_market_sentiment()
+print(f"Fear & Greed: {sentiment.fear_greed_value}")
+print(f"Trending: {sentiment.trending_coins}")
+
+# Individual sources
+reddit = await aggregator.get_reddit_news("CryptoCurrency", 10)
+fg = await aggregator.get_fear_greed()
+defi = await aggregator.get_defi_overview()
+
+
+================================================================================
+6. CLI USAGE
+================================================================================
+
+# News from all sources
+python integrations/news/crypto_news_aggregator.py news --limit 20
+
+# Reddit posts
+python integrations/news/crypto_news_aggregator.py reddit --subreddit Bitcoin
+
+# Market sentiment
+python integrations/news/crypto_news_aggregator.py sentiment
+
+# Trending coins
+python integrations/news/crypto_news_aggregator.py trending
+
+# Fear & Greed with history
+python integrations/news/crypto_news_aggregator.py fear-greed
+
+# DeFi overview
+python integrations/news/crypto_news_aggregator.py defi
+
+# All commands support --json flag for JSON output
+
+
+================================================================================
+7. DATA STRUCTURES
+================================================================================
+
+NewsItem:
+  - title: str
+  - url: str
+  - source: str (e.g., "cointelegraph", "r/CryptoCurrency")
+  - source_type: NewsSource enum
+  - published_at: datetime
+  - body: Optional[str] (first 500 chars)
+  - tags: Optional[List[str]]
+  - categories: Optional[List[str]]
+  - score: Optional[int] (Reddit upvotes)
+  - image_url: Optional[str]
+
+MarketSentiment:
+  - fear_greed_value: int (0-100)
+  - fear_greed_classification: str
+  - reddit_sentiment: str (Bullish/Neutral/Bearish)
+  - trending_coins: List[str]
+  - timestamp: datetime
+
+
+================================================================================
+8. AGENTIC PROMPTS (AGPs) CREATED
+================================================================================
+
+AGP                     | Model   | Description
+------------------------|---------|---------------------------------------------
+/news-intelligence      | sonnet  | Full news aggregation by scope (token/macro/etf/defi)
+/news-scan              | haiku   | Quick 60-second market pulse check
+/news-watchlist         | haiku   | Monitor news for token watchlist with alerts
+
+USAGE EXAMPLES:
+
+# Quick scan (60 seconds)
+/news-scan
+
+# Full sentiment overview
+/news-intelligence
+
+# Token-specific deep dive
+/news-intelligence token BTC ETH SOL
+
+# Macro economic analysis
+/news-intelligence macro
+
+# ETF flow analysis
+/news-intelligence etf
+
+# DeFi protocol news
+/news-intelligence defi
+
+# Regulatory updates
+/news-intelligence regulation
+
+# Watchlist monitoring
+/news-watchlist BTC ETH SOL HYPE
+
+
+SUPPORTED SCOPES (/news-intelligence):
+
+Scope       | Data Sources                      | Output
+------------|-----------------------------------|----------------------------------
+token       | CryptoCompare, Reddit, CoinGecko  | Per-token report with sentiment
+macro       | Web Search, correlations          | Fed, inflation, geopolitical
+etf         | Web Search, flow data             | ETF inflows/outflows, institutional
+defi        | DeFiLlama, Web Search             | TVL changes, protocol news
+regulation  | Web Search                        | SEC, CFTC, global regulatory
+sentiment   | All sources combined              | Market mood overview (default)
+
+
+================================================================================
+9. FUTURE ENHANCEMENTS (Not Implemented)
+================================================================================
+
+API                 | Cost              | Adds
+--------------------|-------------------|------------------------------------
+CryptoPanic Pro     | $29/mo            | Sentiment voting, real-time alerts
+LunarCrush          | $99/mo            | Social metrics, influencer tracking
+Santiment           | $49/mo            | On-chain + social analytics
+The TIE             | Enterprise        | Institutional sentiment data
+
+
+================================================================================
+END OF SPECIFICATION
+================================================================================

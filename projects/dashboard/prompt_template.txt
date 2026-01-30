@@ -1,0 +1,1 @@
+See your main prompt spec. This is a placeholder template file to package with the kit.

@@ -1,0 +1,14 @@
+{
+  "name": "discord-channel-forwarder",
+  "version": "1.0.0",
+  "description": "A safe Discord channel message forwarder",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "node-fetch": "^2.6.1",
+    "dotenv": "^16.4.1"
+  },
+  "type": "module"
+}

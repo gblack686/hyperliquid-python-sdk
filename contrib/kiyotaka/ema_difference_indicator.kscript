@@ -1,0 +1,29 @@
+// EMA Difference Indicator - Example from Kiyotaka kScript documentation
+// This script calculates and plots the difference between fast and slow EMAs
+
+// Define the indicator as an off-chart indicator with auto scale
+define("EMA Difference", "offchart", true)
+
+// Set up the data source - uses current symbol and exchange
+source("ohlcv", currentSymbol, currentExchange)
+
+// Define user inputs for customization
+var fastPeriod = input("fastPeriod", "number", 7, "Fast Period")
+var slowPeriod = input("slowPeriod", "number", 21, "Slow Period")
+
+// Calculate EMAs using closing prices
+var fastEMA = ema(close, fastPeriod)
+var slowEMA = ema(close, slowPeriod)
+
+// Calculate the difference between fast and slow EMAs
+var emaDiff = fastEMA - slowEMA
+
+// Plot the EMA difference as a line chart
+plot(emaDiff, "EMA Difference", "line", color(0, 150, 136))
+
+// Add a zero line for reference
+hline(0, "Zero Line", color(128, 128, 128), "dash")
+
+// Color the area between the EMA difference and zero line
+// Green when positive, red when negative
+fill(emaDiff, 0, emaDiff > 0 ? color(0, 150, 136, 30) : color(244, 67, 54, 30))

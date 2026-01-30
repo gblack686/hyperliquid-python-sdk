@@ -1,0 +1,55 @@
+{
+  "startTime": "2025-08-22T18:54:53.162Z",
+  "channelStats": {
+    "1193836001827770389": {
+      "messagesForwarded": 1,
+      "errors": 0,
+      "lastMessage": {
+        "id": "1408463197416984619",
+        "timestamp": "2025-08-22T14:49:54.245000+00:00",
+        "author": ".ccolumbus"
+      },
+      "lastError": null,
+      "channelName": "🧭・columbus-trades"
+    },
+    "1259544407288578058": {
+      "messagesForwarded": 1,
+      "errors": 0,
+      "lastMessage": {
+        "id": "1408514527854854316",
+        "timestamp": "2025-08-22T18:13:52.375000+00:00",
+        "author": "seascalperfarouk"
+      },
+      "lastError": null,
+      "channelName": "🐚・sea-scalper-farouk"
+    },
+    "1379129142393700492": {
+      "messagesForwarded": 1,
+      "errors": 0,
+      "lastMessage": {
+        "id": "1408466761560625203",
+        "timestamp": "2025-08-22T15:04:04.003000+00:00",
+        "author": "wazwithazed"
+      },
+      "lastError": null,
+      "channelName": "🧮・quant-flow"
+    },
+    "1259479627076862075": {
+      "messagesForwarded": 0,
+      "errors": 0,
+      "lastMessage": null,
+      "lastError": null,
+      "channelName": "⛵・josh-the-navigator"
+    },
+    "1176852425534099548": {
+      "messagesForwarded": 0,
+      "errors": 0,
+      "lastMessage": null,
+      "lastError": null,
+      "channelName": "💥・crypto-chat"
+    }
+  },
+  "totalMessagesForwarded": 3,
+  "totalErrors": 0,
+  "lastCheck": "2025-08-22T18:55:06.098Z"
+}

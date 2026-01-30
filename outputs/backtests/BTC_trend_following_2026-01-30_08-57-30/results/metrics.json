@@ -1,0 +1,14 @@
+{
+  "initial_capital": 10000,
+  "final_equity": 9041.441010420136,
+  "total_return_pct": -9.58558989579864,
+  "buy_hold_return_pct": -7.7666130017209785,
+  "total_trades": 6,
+  "winning_trades": 3,
+  "losing_trades": 3,
+  "win_rate_pct": 50.0,
+  "avg_win": 5.089229271505736,
+  "avg_loss": -3.160775598904829,
+  "profit_factor": 1.6101203999642029,
+  "max_drawdown_pct": 10.31993415310908
+}

@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "hyperliquid-real": {
+      "command": "python",
+      "args": ["C:\\Users\\gblac\\OneDrive\\Desktop\\hyperliquid-python-sdk\\mcp\\real_data_mcp_server.py"],
+      "description": "Real Hyperliquid market data (port 8889)"
+    },
+    "hyperliquid-mock": {
+      "command": "python",
+      "args": ["C:\\Users\\gblac\\OneDrive\\Desktop\\hyperliquid-python-sdk\\mcp\\start_mock_server.py"],
+      "description": "Mock data for testing (port 8888)"
+    },
+    "hyperliquid-info": {
+      "command": "python",
+      "args": ["C:\\Users\\gblac\\OneDrive\\Desktop\\hyperliquid-python-sdk\\mcp\\python\\kukapay_info_server.py"],
+      "description": "User analytics and positions (port 8401)"
+    },
+    "hyperliquid-whale": {
+      "command": "python",
+      "args": ["C:\\Users\\gblac\\OneDrive\\Desktop\\hyperliquid-python-sdk\\mcp\\python\\whale_tracker_server.py"],
+      "description": "Whale tracking and large trades (port 8402)"
+    },
+    "hyperliquid-trading": {
+      "command": "python",
+      "args": ["C:\\Users\\gblac\\OneDrive\\Desktop\\hyperliquid-python-sdk\\mcp\\python\\advanced_trading_server.py"],
+      "description": "Advanced trading with indicators (port 8403)"
+    }
+  }
+}

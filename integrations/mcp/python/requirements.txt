@@ -1,0 +1,28 @@
+# Python MCP Servers Requirements
+
+# Core dependencies
+hyperliquid-python-sdk>=0.17.0
+pydantic>=2.0.0
+fastapi>=0.100.0
+uvicorn>=0.23.0
+websockets>=11.0
+aiohttp>=3.8.0
+
+# MCP Servers (install as available)
+# hyperliquid-mcp>=0.1.5  # midodimori's comprehensive MCP
+# hyperliquid-info-mcp  # kukapay's info MCP
+# hyperliquid-whalealert-mcp  # kukapay's whale alert MCP
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Environment and configuration
+python-dotenv>=1.0.0
+
+# Logging and monitoring
+loguru>=0.7.0
+
+# Optional: Database support
+# supabase>=2.0.0
+# sqlalchemy>=2.0.0

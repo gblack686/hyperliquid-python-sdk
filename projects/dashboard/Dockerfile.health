@@ -1,0 +1,33 @@
+# Dockerfile for Health Monitor
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir \
+    fastapi==0.104.1 \
+    uvicorn[standard]==0.24.0 \
+    supabase==2.0.3 \
+    python-dotenv==1.0.0 \
+    httpx==0.24.0 \
+    requests==2.31.0
+
+# Copy application code
+COPY health_monitor.py .
+COPY .env.example .env
+
+# Create non-root user
+RUN useradd -m -u 1000 health && chown -R health:health /app
+
+# Switch to non-root user  
+USER health
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8002/health || exit 1
+
+# Expose port
+EXPOSE 8002
+
+# Run health monitor
+CMD ["python", "-u", "health_monitor.py"]

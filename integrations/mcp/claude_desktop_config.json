@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "hyperliquid-real": {
+      "command": "python",
+      "args": ["C:\\Users\\gblac\\OneDrive\\Desktop\\hyperliquid-python-sdk\\mcp\\real_data_mcp_server.py"]
+    },
+    "hyperliquid-mock": {
+      "command": "python", 
+      "args": ["C:\\Users\\gblac\\OneDrive\\Desktop\\hyperliquid-python-sdk\\mcp\\start_mock_server.py"]
+    }
+  }
+}

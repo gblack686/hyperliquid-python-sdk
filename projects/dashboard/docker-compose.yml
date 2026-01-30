@@ -1,0 +1,164 @@
+version: '3.8'
+
+services:
+  # CVD Indicator - Cumulative Volume Delta (runs separately for reliability)
+  cvd-indicator:
+    build:
+      context: .
+      target: cvd-indicator
+    container_name: hl-cvd
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - hyperliquid-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Stats Collector - Fetches official stats from stats.hyperliquid.xyz
+  stats-collector:
+    build:
+      context: .
+      target: stats-collector
+    container_name: hl-stats
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - hyperliquid-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Indicator Manager - Runs all other indicators
+  indicators:
+    build:
+      context: .
+      target: indicators
+    container_name: hl-indicators
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - hyperliquid-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Trigger Streamer - Real-time trigger detection
+  trigger-streamer:
+    build:
+      context: .
+      target: trigger-streamer
+    container_name: hl-trigger-streamer
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./triggers/triggers.yaml:/app/triggers/triggers.yaml:ro
+    networks:
+      - hyperliquid-net
+    depends_on:
+      - trigger-analyzer
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Trigger Analyzer - LLM analysis service
+  trigger-analyzer:
+    build:
+      context: .
+      target: trigger-analyzer
+    container_name: hl-trigger-analyzer
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL}
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - hyperliquid-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Paper Trading Service
+  paper-trader:
+    build:
+      context: .
+      target: paper-trader
+    container_name: hl-paper-trader
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - hyperliquid-net
+    depends_on:
+      - trigger-streamer
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # All-in-one service (optional - runs all services via supervisor)
+  all-services:
+    build:
+      context: .
+      target: main
+    container_name: hl-all-services
+    restart: unless-stopped
+    ports:
+      - "8080:8000"  # Trigger analyzer
+      - "8081:8001"  # Additional service port
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./triggers/triggers.yaml:/app/triggers/triggers.yaml:ro
+    networks:
+      - hyperliquid-net
+    profiles:
+      - full
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+networks:
+  hyperliquid-net:
+    driver: bridge
+
+volumes:
+  logs:
+  data:

@@ -1,0 +1,6 @@
+{
+  "nodeModulesDir": "auto",
+  "tasks": {
+    "test": "deno run --allow-all test-edge-function.ts"
+  }
+}

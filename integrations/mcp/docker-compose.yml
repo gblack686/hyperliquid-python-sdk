@@ -1,0 +1,122 @@
+version: '3.8'
+
+services:
+  # Real Data MCP Server - No API key needed
+  mcp-real:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: hyperliquid-mcp-real
+    ports:
+      - "8889:8889"
+    environment:
+      - PORT=8889
+      - SERVER_TYPE=real
+    volumes:
+      - ./real_data_mcp_server.py:/app/server.py
+    command: python server.py
+    restart: unless-stopped
+    networks:
+      - mcp-network
+
+  # Mock MCP Server - Testing without API
+  mcp-mock:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: hyperliquid-mcp-mock
+    ports:
+      - "8888:8888"
+    environment:
+      - PORT=8888
+      - SERVER_TYPE=mock
+    volumes:
+      - ./start_mock_server.py:/app/server.py
+    command: python server.py
+    restart: unless-stopped
+    networks:
+      - mcp-network
+
+  # Python MCP Server - Full SDK integration
+  mcp-python:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: hyperliquid-mcp-python
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+      - HYPERLIQUID_NETWORK=mainnet
+      - HYPERLIQUID_API_KEY=${HYPERLIQUID_API_KEY}
+      - HYPERLIQUID_SECRET_KEY=${HYPERLIQUID_SECRET_KEY}
+    volumes:
+      - ./python_mcp_server.py:/app/server.py
+    command: python server.py
+    restart: unless-stopped
+    networks:
+      - mcp-network
+
+  # Kukapay Info Server
+  mcp-kukapay-info:
+    build:
+      context: ./python/kukapay-info
+      dockerfile: Dockerfile
+    container_name: hyperliquid-mcp-kukapay-info
+    ports:
+      - "8002:8002"
+    environment:
+      - PORT=8002
+      - HYPERLIQUID_API_KEY=${HYPERLIQUID_API_KEY}
+    restart: unless-stopped
+    networks:
+      - mcp-network
+
+  # Kukapay Whale Server
+  mcp-kukapay-whale:
+    build:
+      context: ./python/kukapay-whale
+      dockerfile: Dockerfile
+    container_name: hyperliquid-mcp-kukapay-whale
+    ports:
+      - "8003:8003"
+    environment:
+      - PORT=8003
+      - HYPERLIQUID_API_KEY=${HYPERLIQUID_API_KEY}
+    restart: unless-stopped
+    networks:
+      - mcp-network
+
+  # JavaScript Mektigboy Server
+  mcp-mektigboy:
+    build:
+      context: ./javascript/mektigboy
+      dockerfile: Dockerfile
+    container_name: hyperliquid-mcp-mektigboy
+    ports:
+      - "8004:8004"
+    environment:
+      - PORT=8004
+      - NODE_ENV=production
+    restart: unless-stopped
+    networks:
+      - mcp-network
+
+  # JavaScript TradingBalthazar Server
+  mcp-balthazar:
+    build:
+      context: ./javascript/tradingbalthazar
+      dockerfile: Dockerfile
+    container_name: hyperliquid-mcp-balthazar
+    ports:
+      - "8005:8005"
+    environment:
+      - PORT=8005
+      - NODE_ENV=production
+    restart: unless-stopped
+    networks:
+      - mcp-network
+
+networks:
+  mcp-network:
+    driver: bridge

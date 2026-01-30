@@ -619,3 +619,55 @@ testing.py
 
 # End of https://www.gitignore.io/api/osx,python,pycharm,windows,visualstudio,visualstudiocode
 examples/config.json
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# ============================================
+# Custom Project Additions (Reorganized)
+# ============================================
+
+# Logs and artifacts
+logs/
+*.log
+
+# Virtual environments
+venv/
+quantpylib_env/
+**/venv/
+
+# Data files and caches
+*.zip
+data/
+**/__pycache__/
+
+# Backtest results (keep in logs/)
+backtest_results*.png
+backtest_results*.json
+tp_backtest_results*.png
+tp_backtest_results*.json
+hype_backtest_results*.png
+
+# Testing artifacts
+testing_*/
+
+# Misc files
+_ul
+*.csv
+
+# Unrelated project configs (if not deleted)
+.bmad-*/
+.playwright-mcp/
+web-bundles/
+
+# AWS credentials (never commit)
+aws/
+
+# Project-specific ignores
+projects/dashboard/venv/
+projects/dashboard/data/
+projects/dashboard/logs/
+projects/mean-reversion/logs/
+projects/mean-reversion/data/

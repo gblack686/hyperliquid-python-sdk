@@ -1,0 +1,5 @@
+{
+  "sample": true,
+  "message": "Note: Trade history requires full user_fills API integration",
+  "trades": []
+}

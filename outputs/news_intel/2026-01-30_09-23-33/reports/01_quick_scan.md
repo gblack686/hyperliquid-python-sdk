@@ -1,0 +1,39 @@
+# Quick News Scan
+Generated: 2026-01-30 09:23:33
+
+## Market Pulse
+
+**Fear & Greed Index:** 16 (Extreme Fear)
+
+## Trending Coins
+- ULTIMA (Ultima)
+- HYPE (Hyperliquid)
+- XAUT (Tether Gold)
+- BTC (Bitcoin)
+- PENGU (Pudgy Penguins)
+- SOL (Solana)
+- BIRB (Moonbirds)
+
+## Top Headlines
+- [cryptonews] Bitcoin Price Prediction: $1.875 Billion Pulled From BTC – Are We Hour...
+  https://cryptonews.com/news/bitcoin-price-prediction-1-875-billion-pulled-from-btc-are-we-hours-away-from-a-major-breakdown/
+- [cryptopotato] Is Ripple’s XRP in Trouble? Analysts Eye Key Support Before Another Cr...
+  https://cryptopotato.com/is-ripples-xrp-in-trouble-analysts-eye-key-support-before-another-crash/
+- [ambcrypto] Trump nominates Kevin Warsh as Fed chair, crypto markets react to pote...
+  https://ambcrypto.com/trump-nominates-kevin-warsh-as-fed-chair-crypto-markets-react-to-potential-policy-shift/
+- [krakenblog] BGB is available for trading!...
+  https://blog.kraken.com/product/asset-listings/bgb-is-available-for-trading
+- [krakenblog] ALEO is available for trading!...
+  https://blog.kraken.com/product/asset-listings/aleo-is-available-for-trading
+- [cryptopolitan] Fed chair pick hits Senate roadblock over Powell investigation...
+  https://www.cryptopolitan.com/tillis-to-block-kevin-warsh-fed-nomination/
+- [krakenblog] HYPE is available for trading!...
+  https://blog.kraken.com/product/asset-listings/hype-is-available-for-trading
+- [krakenblog] USAT is available for trading!...
+  https://blog.kraken.com/product/asset-listings/usat-is-available-for-trading
+
+## Reddit Hot (r/CryptoCurrency)
+- [1985 pts] It's Been an Honor Trading With Y’all...
+- [659 pts] Bitcoin falls to $81K, triggering $1.7B in liquidations...
+- [1373 pts] Crypto Is Still One Of The Most Asymmetrical Bets...
+- [730 pts] The Exact Reason The Market Just Crashed...

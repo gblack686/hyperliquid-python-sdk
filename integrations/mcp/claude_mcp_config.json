@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "hyperliquid-real": {
+      "command": "python",
+      "args": ["C:\\Users\\gblac\\OneDrive\\Desktop\\hyperliquid-python-sdk\\mcp\\real_data_mcp_server.py"],
+      "env": {
+        "PORT": "8889"
+      },
+      "description": "Real Hyperliquid market data (no API key needed)"
+    },
+    "hyperliquid-mock": {
+      "command": "python",
+      "args": ["C:\\Users\\gblac\\OneDrive\\Desktop\\hyperliquid-python-sdk\\mcp\\start_mock_server.py"],
+      "env": {
+        "PORT": "8888"
+      },
+      "description": "Mock Hyperliquid data for testing"
+    },
+    "hyperliquid-python": {
+      "command": "python",
+      "args": ["C:\\Users\\gblac\\OneDrive\\Desktop\\hyperliquid-python-sdk\\mcp\\python_mcp_server.py"],
+      "env": {
+        "PORT": "8001",
+        "HYPERLIQUID_NETWORK": "mainnet"
+      },
+      "description": "Python MCP server with SDK integration"
+    }
+  }
+}

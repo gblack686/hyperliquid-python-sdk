@@ -1,0 +1,379 @@
+================================================================================
+AWS HYPERLIQUID MONITOR - DEPLOYMENT SPECIFICATION
+================================================================================
+Date: 2026-01-29
+Version: 1.0.0
+
+================================================================================
+1. COST ANALYSIS
+================================================================================
+
+OPTION A: DynamoDB Mode (AWS-Native) - RECOMMENDED FOR LOW COST
+--------------------------------------------------------------------------------
+Service                    Spec                         Monthly     Daily
+--------------------------------------------------------------------------------
+Fargate Spot              0.25 vCPU, 512MB ARM         ~$3.50      $0.12
+DynamoDB                  On-demand (25GB free)        $0-2        $0-0.07
+CloudWatch                Logs + Alarms                ~$2         $0.07
+Secrets Manager           1 secret                     $0.40       $0.01
+ECR                       Container images             ~$1         $0.03
+--------------------------------------------------------------------------------
+TOTAL                                                  ~$7-10/mo   ~$0.25-0.35/day
+================================================================================
+
+
+OPTION B: Supabase Mode ($25/mo Supabase Pro)
+--------------------------------------------------------------------------------
+Service                    Spec                         Monthly     Daily
+--------------------------------------------------------------------------------
+Supabase Pro              8GB DB, 250GB bandwidth      $25         $0.83
+Fargate Spot              0.25 vCPU, 512MB ARM         ~$3.50      $0.12
+CloudWatch                Logs + Alarms                ~$2         $0.07
+Secrets Manager           2 secrets                    $0.80       $0.03
+ECR                       Container images             ~$1         $0.03
+--------------------------------------------------------------------------------
+TOTAL                                                  ~$32-35/mo  ~$1.05-1.15/day
+================================================================================
+
+
+DYNAMODB SCALING COSTS (based on trading activity)
+--------------------------------------------------------------------------------
+Trading Activity          Writes/Day    DynamoDB Cost/Day    Monthly
+--------------------------------------------------------------------------------
+Light (1-10 trades)       ~50           $0.00                $0
+Moderate (10-50)          ~200          $0.00                $0
+Heavy (50-200)            ~1,000        $0.001               ~$0.05
+Very Heavy (200+)         ~5,000        $0.006               ~$0.20
+--------------------------------------------------------------------------------
+Note: DynamoDB free tier includes 25 WCUs, 25 RCUs always free
+
+
+================================================================================
+2. ARCHITECTURE OVERVIEW
+================================================================================
+
+                                 +------------------------------------+
+                                 |         AWS Cloud                  |
++------------------+             |                                    |
+|   Hyperliquid    |   WebSocket |  +----------------------------+   |
+|   Exchange       |<------------+--| ECS Fargate (Spot)         |   |
+|                  |             |  | - 0.25 vCPU, 512MB         |   |
++------------------+             |  | - ARM64 (20% cheaper)      |   |
+                                 |  | - Auto-restart             |   |
+                                 |  +--------------+-------------+   |
+                                 |                 |                  |
+                                 |                 v                  |
+                                 |  +----------------------------+   |
+                                 |  | Secrets Manager            |   |
+                                 |  | - API keys                 |   |
+                                 |  | - DB credentials           |   |
+                                 |  +----------------------------+   |
+                                 |                 |                  |
+                      +----------+-----------------+----------+      |
+                      |          |                 |          |      |
+                      v          |                 v          |      |
+         +------------------+    |    +------------------+    |      |
+         | DynamoDB Tables  |    |    | Supabase (Pro)   |    |      |
+         | - hl-fills       |    |    | - fills          |    |      |
+         | - hl-positions   |    |    | - positions      |    |      |
+         | - hl-dashboard   |    |    | - hl_dashboard   |    |      |
+         | - hl-orders      |    |    | - hl_orders      |    |      |
+         | - hl-cvd         |    |    | ($25/month)      |    |      |
+         | (On-Demand)      |    |    +------------------+    |      |
+         +------------------+    |          Mode B            |      |
+              Mode A            |                             |      |
+                      +----------+-----------------------------+      |
+                                 |                                    |
+                                 |  +----------------------------+   |
+                                 |  | CloudWatch                 |   |
+                                 |  | - Logs (2 week retain)     |   |
+                                 |  | - Alarms -> SNS            |   |
+                                 |  | - Dashboard                |   |
+                                 |  +--------------+-------------+   |
+                                 |                 |                  |
+                                 |                 v                  |
+                                 |  +----------------------------+   |
+                                 |  | SNS -> Lambda              |   |
+                                 |  | - Discord webhook          |   |
+                                 |  | - Telegram bot             |   |
+                                 |  | - Email alerts             |   |
+                                 |  +----------------------------+   |
+                                 |                                    |
+                                 +------------------------------------+
+
+
+COMPONENTS:
+-----------
+1. ECS Fargate (Spot)
+   - Runs monitor.py in Docker container
+   - ARM64 architecture for cost savings
+   - Auto-restarts on failure
+   - Circuit breaker with rollback
+
+2. Database Layer (choose one)
+   - DynamoDB: Pay-per-request, free tier eligible
+   - Supabase: PostgreSQL with realtime subscriptions
+
+3. Secrets Manager
+   - Stores Hyperliquid API key and account address
+   - Optional Supabase credentials
+
+4. CloudWatch
+   - Centralized logging
+   - CPU/Memory alarms
+   - Task count monitoring
+
+5. SNS + Lambda
+   - Alert notifications
+   - Webhook support for Discord/Telegram
+
+
+================================================================================
+3. FILES CREATED
+================================================================================
+
+aws/
+  cdk/
+    app.py              CDK stack definition (HyperliquidMonitorStack)
+    cdk.json            CDK configuration
+    requirements.txt    CDK Python dependencies
+  docker/
+    Dockerfile          Container image (ARM64, Python 3.11)
+    monitor.py          Monitor with DynamoDB + Supabase adapters
+    requirements.txt    Python runtime dependencies
+  README.md             Deployment guide
+
+
+================================================================================
+4. DEPLOYMENT COMMANDS
+================================================================================
+
+PREREQUISITES
+-------------
+# Install AWS CDK
+npm install -g aws-cdk
+
+# Install Python dependencies
+cd aws/cdk
+pip install -r requirements.txt
+
+# Configure AWS credentials
+aws configure
+
+
+STEP 1: Bootstrap CDK (first time only)
+----------------------------------------
+cdk bootstrap aws://ACCOUNT_ID/us-east-1
+
+
+STEP 2: Deploy Stack
+--------------------
+# Option A: DynamoDB Mode (cheapest)
+cd aws/cdk
+cdk deploy --context db_mode=dynamodb
+
+# Option B: Supabase Mode
+cd aws/cdk
+cdk deploy --context db_mode=supabase
+
+
+STEP 3: Configure Secrets
+-------------------------
+# For DynamoDB mode
+aws secretsmanager put-secret-value \
+    --secret-id hl-monitor/prod/credentials \
+    --secret-string '{
+        "HYPERLIQUID_API_KEY": "your_private_key_here",
+        "ACCOUNT_ADDRESS": "0xYourAddress"
+    }'
+
+# For Supabase mode (additional secret)
+aws secretsmanager put-secret-value \
+    --secret-id hl-monitor/supabase \
+    --secret-string '{
+        "SUPABASE_URL": "https://your-project.supabase.co",
+        "SUPABASE_ANON_KEY": "your_anon_key",
+        "SUPABASE_SERVICE_KEY": "your_service_key"
+    }'
+
+
+STEP 4: Force New Deployment (after secrets update)
+---------------------------------------------------
+aws ecs update-service \
+    --cluster hl-monitor-cluster \
+    --service $(aws ecs list-services --cluster hl-monitor-cluster --query 'serviceArns[0]' --output text | xargs basename) \
+    --force-new-deployment
+
+
+================================================================================
+5. CONFIGURATION STEPS (SUPABASE MODE)
+================================================================================
+
+Run this SQL in Supabase SQL Editor:
+
+-- Fills table
+CREATE TABLE IF NOT EXISTS fills (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    account_address TEXT NOT NULL,
+    coin TEXT NOT NULL,
+    side TEXT NOT NULL,
+    price DECIMAL(20, 8) NOT NULL,
+    size DECIMAL(20, 8) NOT NULL,
+    order_id TEXT,
+    closed_pnl DECIMAL(20, 8),
+    is_position_close BOOLEAN DEFAULT FALSE,
+    tx_hash TEXT,
+    metadata JSONB
+);
+
+-- Positions table (with upsert support)
+CREATE TABLE IF NOT EXISTS positions (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    account_address TEXT NOT NULL,
+    coin TEXT NOT NULL,
+    size DECIMAL(20, 8) NOT NULL,
+    side TEXT NOT NULL,
+    entry_price DECIMAL(20, 8),
+    mark_price DECIMAL(20, 8),
+    liquidation_price DECIMAL(20, 8),
+    unrealized_pnl DECIMAL(20, 8),
+    margin_used DECIMAL(20, 8),
+    is_open BOOLEAN DEFAULT TRUE,
+    closed_at TIMESTAMPTZ,
+    realized_pnl DECIMAL(20, 8),
+    metadata JSONB,
+    UNIQUE(account_address, coin)
+);
+
+-- Dashboard snapshots
+CREATE TABLE IF NOT EXISTS hl_dashboard (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    account_address TEXT NOT NULL,
+    account_value DECIMAL(20, 8),
+    total_margin_used DECIMAL(20, 8),
+    withdrawable DECIMAL(20, 8),
+    total_unrealized_pnl DECIMAL(20, 8),
+    leverage DECIMAL(10, 4),
+    health_score INTEGER,
+    positions_count INTEGER
+);
+
+-- Orders table
+CREATE TABLE IF NOT EXISTS hl_orders (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    account_address TEXT NOT NULL,
+    order_id TEXT UNIQUE NOT NULL,
+    coin TEXT,
+    side TEXT,
+    size DECIMAL(20, 8),
+    price DECIMAL(20, 8),
+    status TEXT,
+    metadata JSONB
+);
+
+-- Indexes
+CREATE INDEX idx_fills_account ON fills(account_address);
+CREATE INDEX idx_fills_created ON fills(created_at DESC);
+CREATE INDEX idx_fills_coin ON fills(coin);
+CREATE INDEX idx_positions_open ON positions(is_open);
+CREATE INDEX idx_dashboard_account ON hl_dashboard(account_address, created_at DESC);
+
+-- Auto-update trigger for positions
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER positions_updated_at
+    BEFORE UPDATE ON positions
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER orders_updated_at
+    BEFORE UPDATE ON hl_orders
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at();
+
+
+================================================================================
+6. MONITORING & OPERATIONS
+================================================================================
+
+VIEW LOGS
+---------
+# Tail logs in real-time
+aws logs tail /ecs/hl-monitor --follow
+
+# Get last hour of logs
+aws logs tail /ecs/hl-monitor --since 1h
+
+
+CHECK SERVICE STATUS
+--------------------
+aws ecs describe-services \
+    --cluster hl-monitor-cluster \
+    --services $(aws ecs list-services --cluster hl-monitor-cluster --query 'serviceArns[0]' --output text | xargs basename) \
+    --query 'services[0].{Status:status,Running:runningCount,Desired:desiredCount}'
+
+
+CLOUDWATCH DASHBOARD
+--------------------
+URL: https://console.aws.amazon.com/cloudwatch/home#dashboards:name=HyperliquidMonitor
+
+
+CLEANUP
+-------
+cdk destroy
+
+
+================================================================================
+7. TROUBLESHOOTING
+================================================================================
+
+TASK KEEPS RESTARTING
+---------------------
+# Check task logs
+aws logs tail /ecs/hl-monitor --since 30m
+
+# Check task stopped reason
+aws ecs describe-tasks \
+    --cluster hl-monitor-cluster \
+    --tasks $(aws ecs list-tasks --cluster hl-monitor-cluster --query 'taskArns[0]' --output text)
+
+
+SECRETS NOT LOADING
+-------------------
+# Verify secret exists
+aws secretsmanager get-secret-value --secret-id hl-monitor/prod/credentials
+
+# Force task to pull new secrets
+aws ecs update-service --cluster hl-monitor-cluster --service <service-name> --force-new-deployment
+
+
+================================================================================
+8. KEY FEATURES
+================================================================================
+
+- WebSocket-based real-time monitoring
+- Automatic position close detection with PnL logging
+- Dashboard snapshots every 60 seconds
+- Dual database support (DynamoDB/Supabase)
+- SNS alerts for critical events
+- Fargate Spot for 70% compute savings
+- ARM64 for additional 20% savings
+- Circuit breaker with automatic rollback
+- ECS Exec enabled for debugging
+
+
+================================================================================
+END OF SPECIFICATION
+================================================================================

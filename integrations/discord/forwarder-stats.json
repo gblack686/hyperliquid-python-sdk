@@ -1,0 +1,11 @@
+{
+  "startTime": "2025-08-22T18:49:06.073Z",
+  "messagesForwarded": 1,
+  "errors": 0,
+  "lastForwardedMessage": {
+    "id": "1408470851065610351",
+    "timestamp": "2025-08-22T15:20:19.017000+00:00",
+    "author": "kyledoops"
+  },
+  "lastError": null
+}

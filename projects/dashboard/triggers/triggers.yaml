@@ -1,0 +1,134 @@
+# Trigger Configuration for Real-time Trading
+# All thresholds are optimized for <60s latency
+
+symbols: [HYPE, BTC, ETH, SOL]
+intervals: [1m, 5m, 15m]
+
+# Trigger definitions
+triggers:
+  # Squeeze triggers (pre-empt violent moves)
+  squeeze_down:
+    description: "Shorts trapped, potential violent up move"
+    when_all:
+      ls_ratio_gt: 2.0           # Long/short ratio > 2.0
+      funding_bp_gt: 5            # Funding > 0.05%
+      oi_delta_5m_pct_gt: 0.5     # OI increased 0.5% in 5m
+      cvd_slope_1m_lt: -0.3       # CVD turning negative
+      vwap_z_1m_lt: -1.0          # Price below VWAP
+    actions:
+      - protective_short
+      - start_analysis
+    cooldown_seconds: 60
+    
+  squeeze_up:
+    description: "Longs trapped, potential violent down move"
+    when_all:
+      ls_ratio_lt: 0.7            # Short heavy positioning
+      funding_bp_lt: -5           # Negative funding
+      oi_delta_5m_pct_gt: 0.5     # OI increasing
+      cvd_slope_1m_gt: 0.3        # CVD turning positive
+      vwap_z_1m_gt: 1.0           # Price above VWAP
+    actions:
+      - protective_long
+      - start_analysis
+    cooldown_seconds: 60
+    
+  # Reversion triggers (fade extremes)
+  reversion_fade_up:
+    description: "Extreme deviation up, expect reversion"
+    when_all:
+      vwap_z_1m_gt: 2.0           # 2 std devs above VWAP
+      cvd_slope_1m_le: 0.0        # CVD stalling
+      near_vpvr_node: 1           # At volume node
+    actions:
+      - fade_short
+      - start_analysis
+    cooldown_seconds: 60
+    
+  reversion_fade_down:
+    description: "Extreme deviation down, expect bounce"
+    when_all:
+      vwap_z_1m_lt: -2.0          # 2 std devs below VWAP
+      cvd_slope_1m_ge: 0.0        # CVD stalling
+      near_vpvr_node: 1           # At volume node
+    actions:
+      - fade_long
+      - start_analysis
+    cooldown_seconds: 60
+    
+  # Breakout triggers (follow momentum)
+  breakout_continuation_long:
+    description: "Momentum acceleration to upside"
+    when_all:
+      oi_delta_5m_pct_gt: 1.0     # Strong OI increase
+      cvd_slope_1m_gt: 0.5        # Strong buying
+      cvd_slope_5m_gt: 0.3        # Sustained buying
+      trade_burst: true           # Volume spike
+      basis_bps_gt: 10            # Perp premium
+    actions:
+      - follow_long
+      - start_analysis
+    cooldown_seconds: 120
+    
+  breakout_continuation_short:
+    description: "Momentum acceleration to downside"
+    when_all:
+      oi_delta_5m_pct_gt: 1.0     # Strong OI increase
+      cvd_slope_1m_lt: -0.5       # Strong selling
+      cvd_slope_5m_lt: -0.3       # Sustained selling
+      trade_burst: true           # Volume spike
+      basis_bps_lt: -10           # Perp discount
+    actions:
+      - follow_short
+      - start_analysis
+    cooldown_seconds: 120
+    
+  # Liquidation cascade triggers
+  liquidation_cascade_long:
+    description: "Potential long liquidation cascade"
+    when_all:
+      ls_ratio_gt: 3.0            # Extremely long
+      funding_bp_gt: 10           # High funding
+      cvd_slope_1m_lt: -0.5       # Sudden selling
+      oi_delta_5m_pct_lt: -0.5    # OI decreasing (longs closing)
+    actions:
+      - hedge_short
+      - start_analysis
+    cooldown_seconds: 30
+    
+  liquidation_cascade_short:
+    description: "Potential short liquidation cascade"
+    when_all:
+      ls_ratio_lt: 0.5            # Extremely short
+      funding_bp_lt: -10          # Very negative funding
+      cvd_slope_1m_gt: 0.5        # Sudden buying
+      oi_delta_5m_pct_lt: -0.5    # OI decreasing (shorts closing)
+    actions:
+      - hedge_long
+      - start_analysis
+    cooldown_seconds: 30
+
+# Order configuration
+order_config:
+  protective_size_pct: 0.15      # 15% of account for protective orders
+  hedge_size_pct: 0.10            # 10% for hedges
+  fade_size_pct: 0.20             # 20% for mean reversion
+  follow_size_pct: 0.25           # 25% for momentum following
+  
+  default_sl_atr: 0.7             # Default stop loss in ATR
+  default_tp_atr: 1.2             # Default take profit in ATR
+  
+  max_concurrent_triggers: 3      # Max triggers active at once
+  
+# Analysis configuration  
+analysis_config:
+  llm_timeout_seconds: 20         # Max time to wait for LLM
+  fallback_to_local: true         # Use local analysis if LLM fails
+  webhook_retries: 2              # Retry webhook calls
+  
+# Monitoring
+monitoring:
+  log_all_triggers: true
+  save_to_database: true
+  metrics_interval_seconds: 60
+  alert_on_error: true

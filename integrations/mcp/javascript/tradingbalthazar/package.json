@@ -1,0 +1,43 @@
+{
+  "name": "hyperliquid-mcp-server-v9",
+  "version": "9.0.0",
+  "description": "Full-featured MCP server with complete trading support for spot and futures",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "jest",
+    "test:integration": "jest --testPathPattern=integration",
+    "test:load": "artillery run tests/load.yml",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.0",
+    "express": "^4.18.0",
+    "ws": "^8.14.0",
+    "ethers": "^6.9.0",
+    "joi": "^17.11.0",
+    "winston": "^3.11.0",
+    "redis": "^4.6.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.0",
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.0",
+    "jest": "^29.0.0",
+    "nodemon": "^3.0.0",
+    "typescript": "^5.0.0",
+    "artillery": "^2.0.0"
+  },
+  "keywords": [
+    "hyperliquid",
+    "mcp",
+    "trading",
+    "spot",
+    "futures",
+    "vault"
+  ],
+  "author": "TradingBalthazar",
+  "license": "MIT"
+}

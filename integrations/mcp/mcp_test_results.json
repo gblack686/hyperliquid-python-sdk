@@ -1,0 +1,185 @@
+{
+  "timestamp": "2025-09-06T13:39:03.037376",
+  "summary": {
+    "total": 7,
+    "online": 1,
+    "offline": 6
+  },
+  "servers": {
+    "Mock Server": {
+      "name": "Mock Server",
+      "url": "http://127.0.0.1:8888",
+      "status": "online",
+      "health": {
+        "name": "Mock Hyperliquid MCP Server",
+        "version": "1.0.0",
+        "description": "Test server for MCP integration without real API keys",
+        "endpoints": [
+          "/mcp/tools",
+          "/mcp/execute"
+        ]
+      },
+      "tools": [
+        {
+          "name": "get_all_mids",
+          "description": "Get mid prices for all symbols",
+          "parameters": {}
+        },
+        {
+          "name": "get_l2_book",
+          "description": "Get Level 2 order book",
+          "parameters": {
+            "symbol": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        {
+          "name": "get_candle_snapshot",
+          "description": "Get historical candles",
+          "parameters": {
+            "symbol": {
+              "type": "string",
+              "required": true
+            },
+            "interval": {
+              "type": "string",
+              "default": "15m"
+            },
+            "lookback": {
+              "type": "integer",
+              "default": 100
+            }
+          }
+        },
+        {
+          "name": "get_user_state",
+          "description": "Get user account state",
+          "parameters": {
+            "address": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        {
+          "name": "get_funding_rates",
+          "description": "Get current funding rates",
+          "parameters": {}
+        },
+        {
+          "name": "get_whale_alerts",
+          "description": "Get whale trade alerts",
+          "parameters": {
+            "min_value": {
+              "type": "number",
+              "default": 1000000
+            }
+          }
+        },
+        {
+          "name": "place_order",
+          "description": "Place a mock order",
+          "parameters": {
+            "symbol": {
+              "type": "string",
+              "required": true
+            },
+            "side": {
+              "type": "string",
+              "required": true
+            },
+            "size": {
+              "type": "number",
+              "required": true
+            },
+            "price": {
+              "type": "number"
+            },
+            "order_type": {
+              "type": "string",
+              "default": "LIMIT"
+            }
+          }
+        },
+        {
+          "name": "cancel_order",
+          "description": "Cancel a mock order",
+          "parameters": {
+            "order_id": {
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      ],
+      "test_results": [
+        {
+          "test": "get_all_mids",
+          "success": true,
+          "sample": [
+            "BTC=$64789.40",
+            "ETH=$3536.75",
+            "SOL=$150.06"
+          ]
+        }
+      ],
+      "error": null
+    },
+    "Python Info": {
+      "name": "Python Info",
+      "url": "http://127.0.0.1:8001",
+      "status": "offline",
+      "health": null,
+      "tools": null,
+      "test_results": [],
+      "error": "HTTP 404"
+    },
+    "Python Whale": {
+      "name": "Python Whale",
+      "url": "http://127.0.0.1:8002",
+      "status": "offline",
+      "health": null,
+      "tools": null,
+      "test_results": [],
+      "error": "200, message='Attempt to decode JSON with unexpected mimetype: text/html; charset=utf-8', url='http://127.0.0.1:8002/'"
+    },
+    "Python Midodimori": {
+      "name": "Python Midodimori",
+      "url": "http://127.0.0.1:8003",
+      "status": "offline",
+      "health": null,
+      "tools": null,
+      "test_results": [],
+      "error": "Cannot connect to host 127.0.0.1:8003 ssl:default [The remote computer refused the network connection]"
+    },
+    "JS Mektigboy": {
+      "name": "JS Mektigboy",
+      "url": "http://127.0.0.1:8004",
+      "status": "offline",
+      "health": null,
+      "tools": null,
+      "test_results": [],
+      "error": "Cannot connect to host 127.0.0.1:8004 ssl:default [The remote computer refused the network connection]"
+    },
+    "JS Balthazar": {
+      "name": "JS Balthazar",
+      "url": "http://127.0.0.1:8005",
+      "status": "offline",
+      "health": null,
+      "tools": null,
+      "test_results": [],
+      "error": "Cannot connect to host 127.0.0.1:8005 ssl:default [The remote computer refused the network connection]"
+    },
+    "JS 6rz6": {
+      "name": "JS 6rz6",
+      "url": "http://127.0.0.1:8006",
+      "status": "offline",
+      "health": null,
+      "tools": null,
+      "test_results": [],
+      "error": "Cannot connect to host 127.0.0.1:8006 ssl:default [The remote computer refused the network connection]"
+    }
+  }
+}
