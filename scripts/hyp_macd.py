@@ -16,12 +16,21 @@ EXAMPLES:
 import os
 import sys
 import asyncio
+import time
 import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
 
+from quantpylib.wrappers.hyperliquid import Hyperliquid
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
+
+INTERVAL_MS = {
+    '1m': 60 * 1000, '5m': 5 * 60 * 1000, '15m': 15 * 60 * 1000,
+    '30m': 30 * 60 * 1000, '1h': 60 * 60 * 1000, '2h': 2 * 60 * 60 * 1000,
+    '4h': 4 * 60 * 60 * 1000, '8h': 8 * 60 * 60 * 1000, '12h': 12 * 60 * 60 * 1000,
+    '1d': 24 * 60 * 60 * 1000, '3d': 3 * 24 * 60 * 60 * 1000, '1w': 7 * 24 * 60 * 60 * 1000,
+}
 
 
 def calculate_ema(data: np.ndarray, period: int) -> np.ndarray:
@@ -110,14 +119,18 @@ TIMEFRAME_MAP = {
 }
 
 
-async def fetch_candles(info: Info, ticker: str, timeframe: str, num_bars: int = 200):
+async def fetch_candles(hyp: Hyperliquid, ticker: str, timeframe: str, num_bars: int = 200):
     """Fetch candle data from Hyperliquid."""
     try:
-        candles = info.candles_snapshot(
-            name=ticker.upper(),
+        now = int(time.time() * 1000)
+        interval_ms = INTERVAL_MS.get(timeframe, 60 * 60 * 1000)
+        start = now - (num_bars * interval_ms)
+        
+        candles = await hyp.candle_historical(
+            ticker=ticker.upper(),
             interval=timeframe,
-            startTime=None,
-            endTime=None
+            start=start,
+            end=now
         )
 
         if not candles:
@@ -138,6 +151,14 @@ async def main(ticker: str, timeframe: str = "1h", fast: int = 12, slow: int = 2
         print(f"[ERROR] Invalid timeframe '{timeframe}'. Valid: {list(TIMEFRAME_MAP.keys())}")
         return
 
+    # Initialize quantpylib
+    hyp = Hyperliquid(
+        key=os.getenv('HYP_KEY'),
+        secret=os.getenv('HYP_SECRET'),
+        mode='live'
+    )
+    await hyp.init_client()
+
     info = Info(constants.MAINNET_API_URL, skip_ws=True)
 
     # Get current price
@@ -146,6 +167,7 @@ async def main(ticker: str, timeframe: str = "1h", fast: int = 12, slow: int = 2
 
     if current_price == 0:
         print(f"[ERROR] Ticker '{ticker}' not found")
+        await hyp.cleanup()
         return
 
     print("=" * 65)
@@ -157,9 +179,10 @@ async def main(ticker: str, timeframe: str = "1h", fast: int = 12, slow: int = 2
     print()
 
     # Calculate MACD
-    closes = await fetch_candles(info, ticker, timeframe, num_bars=slow * 3)
+    closes = await fetch_candles(hyp, ticker, timeframe, num_bars=slow * 3)
 
     if closes is None or len(closes) < slow + signal:
+        await hyp.cleanup()
         print("[ERROR] Insufficient data for MACD calculation")
         return
 
@@ -218,7 +241,7 @@ async def main(ticker: str, timeframe: str = "1h", fast: int = 12, slow: int = 2
 
     timeframes = ["15m", "1h", "4h", "1d"]
     for tf in timeframes:
-        tf_closes = await fetch_candles(info, ticker, tf, num_bars=slow * 3)
+        tf_closes = await fetch_candles(hyp, ticker, tf, num_bars=slow * 3)
         if tf_closes is not None and len(tf_closes) >= slow + signal:
             tf_macd = calculate_macd(tf_closes, fast, slow, signal)
             if tf_macd:
@@ -228,6 +251,7 @@ async def main(ticker: str, timeframe: str = "1h", fast: int = 12, slow: int = 2
                 print(f"  {tf:>4}  {tf_macd['macd']:>10.4f}  {tf_macd['signal']:>10.4f}  {tf_macd['histogram']:>10.4f}  {status}")
 
     print("=" * 65)
+    await hyp.cleanup()
 
 
 if __name__ == "__main__":

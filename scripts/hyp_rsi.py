@@ -16,12 +16,22 @@ EXAMPLES:
 import os
 import sys
 import asyncio
+import time
 import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
 
+from quantpylib.wrappers.hyperliquid import Hyperliquid
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
+
+# Interval to milliseconds mapping
+INTERVAL_MS = {
+    '1m': 60 * 1000, '5m': 5 * 60 * 1000, '15m': 15 * 60 * 1000,
+    '30m': 30 * 60 * 1000, '1h': 60 * 60 * 1000, '2h': 2 * 60 * 60 * 1000,
+    '4h': 4 * 60 * 60 * 1000, '8h': 8 * 60 * 60 * 1000, '12h': 12 * 60 * 60 * 1000,
+    '1d': 24 * 60 * 60 * 1000, '3d': 3 * 24 * 60 * 60 * 1000, '1w': 7 * 24 * 60 * 60 * 1000,
+}
 
 
 def calculate_rsi(closes: np.ndarray, period: int = 14) -> float:
@@ -78,21 +88,22 @@ TIMEFRAME_MAP = {
 }
 
 
-async def fetch_candles(info: Info, ticker: str, timeframe: str, num_bars: int = 200):
-    """Fetch candle data from Hyperliquid."""
+async def fetch_candles(hyp: Hyperliquid, ticker: str, timeframe: str, num_bars: int = 200):
+    """Fetch candle data from Hyperliquid using quantpylib."""
     try:
-        candles = info.candles_snapshot(
-            name=ticker.upper(),
+        now = int(time.time() * 1000)
+        interval_ms = INTERVAL_MS.get(timeframe, 60 * 60 * 1000)
+        start = now - (num_bars * interval_ms)
+
+        candles = await hyp.candle_historical(
+            ticker=ticker.upper(),
             interval=timeframe,
-            startTime=None,
-            endTime=None
+            start=start,
+            end=now
         )
 
-        if not candles:
+        if not candles or len(candles) == 0:
             return None
-
-        # Take last num_bars
-        candles = candles[-num_bars:] if len(candles) > num_bars else candles
 
         closes = np.array([float(c['c']) for c in candles])
         return closes
@@ -108,6 +119,14 @@ async def main(ticker: str, period: int = 14, timeframe: str = "1h"):
         print(f"[ERROR] Invalid timeframe '{timeframe}'. Valid: {list(TIMEFRAME_MAP.keys())}")
         return
 
+    # Initialize quantpylib
+    hyp = Hyperliquid(
+        key=os.getenv('HYP_KEY'),
+        secret=os.getenv('HYP_SECRET'),
+        mode='live'
+    )
+    await hyp.init_client()
+
     info = Info(constants.MAINNET_API_URL, skip_ws=True)
 
     # Get current price
@@ -116,6 +135,7 @@ async def main(ticker: str, period: int = 14, timeframe: str = "1h"):
 
     if current_price == 0:
         print(f"[ERROR] Ticker '{ticker}' not found")
+        await hyp.cleanup()
         return
 
     print("=" * 60)
@@ -127,10 +147,11 @@ async def main(ticker: str, period: int = 14, timeframe: str = "1h"):
     print()
 
     # Calculate RSI
-    closes = await fetch_candles(info, ticker, timeframe, num_bars=period * 3)
+    closes = await fetch_candles(hyp, ticker, timeframe, num_bars=period * 3)
 
     if closes is None or len(closes) < period + 1:
         print("[ERROR] Insufficient data for RSI calculation")
+        await hyp.cleanup()
         return
 
     rsi = calculate_rsi(closes, period)
@@ -176,13 +197,14 @@ async def main(ticker: str, period: int = 14, timeframe: str = "1h"):
 
     timeframes = ["15m", "1h", "4h", "1d"]
     for tf in timeframes:
-        tf_closes = await fetch_candles(info, ticker, tf, num_bars=period * 3)
+        tf_closes = await fetch_candles(hyp, ticker, tf, num_bars=period * 3)
         if tf_closes is not None and len(tf_closes) >= period + 1:
             tf_rsi = calculate_rsi(tf_closes, period)
             tf_signal = get_rsi_signal(tf_rsi)
             print(f"  {tf:>4}: RSI {tf_rsi:>6.2f} | {tf_signal['zone']:>18} | {tf_signal['signal']}")
 
     print("=" * 60)
+    await hyp.cleanup()
 
 
 if __name__ == "__main__":

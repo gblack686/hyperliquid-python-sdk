@@ -16,12 +16,21 @@ EXAMPLES:
 import os
 import sys
 import asyncio
+import time
 import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
 
+from quantpylib.wrappers.hyperliquid import Hyperliquid
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
+
+INTERVAL_MS = {
+    '1m': 60 * 1000, '5m': 5 * 60 * 1000, '15m': 15 * 60 * 1000,
+    '30m': 30 * 60 * 1000, '1h': 60 * 60 * 1000, '2h': 2 * 60 * 60 * 1000,
+    '4h': 4 * 60 * 60 * 1000, '8h': 8 * 60 * 60 * 1000, '12h': 12 * 60 * 60 * 1000,
+    '1d': 24 * 60 * 60 * 1000, '3d': 3 * 24 * 60 * 60 * 1000, '1w': 7 * 24 * 60 * 60 * 1000,
+}
 
 
 def find_pivot_points(data: np.ndarray, order: int = 5) -> tuple:
@@ -171,14 +180,18 @@ TIMEFRAME_MAP = {
 }
 
 
-async def fetch_candles(info: Info, ticker: str, timeframe: str, num_bars: int = 200):
+async def fetch_candles(hyp: Hyperliquid, ticker: str, timeframe: str, num_bars: int = 200):
     """Fetch candle data from Hyperliquid."""
     try:
-        candles = info.candles_snapshot(
-            name=ticker.upper(),
+        now = int(time.time() * 1000)
+        interval_ms = INTERVAL_MS.get(timeframe, 60 * 60 * 1000)
+        start = now - (num_bars * interval_ms)
+        
+        candles = await hyp.candle_historical(
+            ticker=ticker.upper(),
             interval=timeframe,
-            startTime=None,
-            endTime=None
+            start=start,
+            end=now
         )
 
         if not candles:
@@ -201,6 +214,14 @@ async def main(ticker: str, timeframe: str = "1h", lookback: int = 100):
         print(f"[ERROR] Invalid timeframe '{timeframe}'. Valid: {list(TIMEFRAME_MAP.keys())}")
         return
 
+    # Initialize quantpylib
+    hyp = Hyperliquid(
+        key=os.getenv('HYP_KEY'),
+        secret=os.getenv('HYP_SECRET'),
+        mode='live'
+    )
+    await hyp.init_client()
+
     info = Info(constants.MAINNET_API_URL, skip_ws=True)
 
     # Get current price
@@ -209,6 +230,7 @@ async def main(ticker: str, timeframe: str = "1h", lookback: int = 100):
 
     if current_price == 0:
         print(f"[ERROR] Ticker '{ticker}' not found")
+        await hyp.cleanup()
         return
 
     print("=" * 70)
@@ -220,9 +242,10 @@ async def main(ticker: str, timeframe: str = "1h", lookback: int = 100):
     print()
 
     # Calculate S/R levels
-    highs, lows, closes = await fetch_candles(info, ticker, timeframe, num_bars=lookback)
+    highs, lows, closes = await fetch_candles(hyp, ticker, timeframe, num_bars=lookback)
 
     if highs is None or len(highs) < 20:
+        await hyp.cleanup()
         print("[ERROR] Insufficient data for S/R calculation")
         return
 
@@ -304,7 +327,7 @@ async def main(ticker: str, timeframe: str = "1h", lookback: int = 100):
 
     timeframes = ["15m", "1h", "4h", "1d"]
     for tf in timeframes:
-        tf_highs, tf_lows, tf_closes = await fetch_candles(info, ticker, tf, num_bars=lookback)
+        tf_highs, tf_lows, tf_closes = await fetch_candles(hyp, ticker, tf, num_bars=lookback)
         if tf_highs is not None and len(tf_highs) >= 20:
             tf_sr = calculate_support_resistance(tf_highs, tf_lows, tf_closes, lookback)
             if tf_sr:
@@ -314,6 +337,7 @@ async def main(ticker: str, timeframe: str = "1h", lookback: int = 100):
                 print(f"  {tf:>4}  {res_str:>14}  {sup_str:>14}  {range_pct:>8}")
 
     print("=" * 70)
+    await hyp.cleanup()
 
 
 if __name__ == "__main__":

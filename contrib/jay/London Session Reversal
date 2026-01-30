@@ -1,0 +1,179 @@
+//@version=5
+strategy(title="London Session Reversal SV1.2", overlay=true, margin_long=100, margin_short=100, pyramiding=0, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// User Inputs
+enableFalseBreakFilter = input.bool(true, title="Enable False Break Filter")
+firstTrailThreshold = input.float(20, title="First Trail Threshold (points)")
+secondTrailThreshold = input.float(35, title="Second Trail Threshold (points)")
+incrementalProfitStep = input.float(20, title="Incremental Profit Step (points)")
+incrementalSLMove = input.float(10, title="Incremental SL Move (points)")
+markerStartHour = input.int(3, title="Marker Session Start Hour (PT)")
+markerStartMin = input.int(0, title="Marker Session Start Minute (PT)")
+markerEndHour = input.int(7, title="Marker Session End Hour (PT)")
+markerEndMin = input.int(0, title="Marker Session End Minute (PT)")
+entryStartHour = input.int(7, title="Entry Window Start Hour (PT)")
+entryStartMin = input.int(0, title="Entry Window Start Minute (PT)")
+entryEndHour = input.int(7, title="Entry Window End Hour (PT)")
+entryEndMin = input.int(30, title="Entry Window End Minute (PT)")
+profitTargetMultiplier = input.float(0.5, title="Profit Target Multiplier (% of Range)", minval=0.0, maxval=1.0)
+plotMarkers = input.bool(true, title="Plot Markers")
+
+// Timezone handling - All times are in Pacific Time (America/Los_Angeles)
+// We use timestamp() with timezone to get UTC equivalents for comparisons
+getPTTimestamp(y, m, d, h, min_) => timestamp("America/Los_Angeles", y, m, d, h, min_, 0)
+
+// Detect new day (in chart timezone, but reset markers daily)
+newDay = ta.change(time("D")) != 0
+
+// Function to check if current bar time is within a PT time range on the current day
+inPTRange(startH, startM, endH, endM) =>
+    barYear = year(time)
+    barMonth = month(time)
+    barDay = dayofmonth(time)
+    startTimePT = getPTTimestamp(barYear, barMonth, barDay, startH, startM)
+    endTimePT = getPTTimestamp(barYear, barMonth, barDay, endH, endM)
+    time >= startTimePT and time < endTimePT
+
+// Marker Calculation
+var float bearishMarker = na
+var float bullishMarker = na
+var bool inMarkerSession = false
+var bool markersSet = false
+
+// Reset on new day
+if newDay
+    bearishMarker := na
+    bullishMarker := na
+    inMarkerSession := false
+    markersSet := false
+
+// During marker session, update high/low
+if inPTRange(markerStartHour, markerStartMin, markerEndHour, markerEndMin)
+    inMarkerSession := true
+    bearishMarker := math.max(nz(bearishMarker, high), high)
+    bullishMarker := math.min(nz(bullishMarker, low), low)
+else if inMarkerSession and not markersSet
+    markersSet := true  // Lock markers after session ends
+
+// Range and Profit Target
+rangePoints = nz(bearishMarker - bullishMarker, 0)
+profitTarget = rangePoints * profitTargetMultiplier
+
+// Entry Window Check
+inEntryWindow = inPTRange(entryStartHour, entryStartMin, entryEndHour, entryEndMin)
+
+// False Break Filter Flags (persist for the day)
+var bool shortEntriesDisabled = false
+var bool longEntriesDisabled = false
+var bool tradeTaken = false  // Flag for one trade per day
+
+if newDay
+    shortEntriesDisabled := false
+    longEntriesDisabled := false
+    tradeTaken := false  // Reset daily
+
+// Detect False Breaks (if enabled)
+if enableFalseBreakFilter and markersSet and inEntryWindow
+    // False break short: wick above bearishMarker but close >= bearishMarker
+    if high > bearishMarker and close >= bearishMarker
+        shortEntriesDisabled := true
+    // False break long: wick below bullishMarker but close <= bullishMarker
+    if low < bullishMarker and close <= bullishMarker
+        longEntriesDisabled := true
+
+// Initial SL persistence
+var float initialSLShort = na
+var float initialSLLong = na
+
+// Short Entry Logic
+shortCondition = false
+if markersSet and inEntryWindow and not shortEntriesDisabled and not tradeTaken
+    crossedAbove = high > bearishMarker
+    closedBelow = close < bearishMarker
+    shortCondition := crossedAbove and closedBelow
+
+if shortCondition
+    strategy.entry("Short", strategy.short)
+    // Initial SL: high of triggering candle
+    initialSLShort := high
+    tradeTaken := true  // Lock out further trades
+
+// Long Entry Logic
+longCondition = false
+if markersSet and inEntryWindow and not longEntriesDisabled and not tradeTaken
+    crossedBelow = low < bullishMarker
+    closedAbove = close > bullishMarker
+    longCondition := crossedBelow and closedAbove
+
+if longCondition
+    strategy.entry("Long", strategy.long)
+    // Initial SL: low of triggering candle
+    initialSLLong := low
+    tradeTaken := true  // Lock out further trades
+
+// Position Management - Only one position per day, close at end of day if needed
+// Assuming end of day is after entry window, but for simplicity, no auto-close here; user can add session close if needed
+
+// Take Profit Levels
+shortTP = strategy.position_avg_price - profitTarget
+longTP = strategy.position_avg_price + profitTarget
+
+// Trailing Stop Logic
+// For Short
+if strategy.position_size < 0
+    float profitPoints = strategy.position_avg_price - close  // Positive for profit
+    float slShort = initialSLShort  // Default initial SL
+    if profitPoints >= firstTrailThreshold
+        slShort := strategy.position_avg_price  // Breakeven
+    if profitPoints >= secondTrailThreshold
+        float lockedProfit = 15
+        slShort := strategy.position_avg_price - lockedProfit
+        float extraProfit = profitPoints - secondTrailThreshold
+        float steps = math.floor(extraProfit / incrementalProfitStep)
+        float additionalLock = steps * incrementalSLMove
+        slShort := slShort - additionalLock  // Move SL further down to lock more profit
+        
+    // Exit if hit TP or SL
+    if close > slShort
+        strategy.close("Short", comment="SL Hit")
+    if close <= shortTP
+        strategy.close("Short", comment="TP Hit")
+
+// For Long (mirror)
+if strategy.position_size > 0
+    float profitPoints = close - strategy.position_avg_price
+    float slLong = initialSLLong  // Default initial SL
+    if profitPoints >= firstTrailThreshold
+        slLong := strategy.position_avg_price  // Breakeven
+    if profitPoints >= secondTrailThreshold
+        float lockedProfit = 15
+        slLong := strategy.position_avg_price + lockedProfit
+        float extraProfit = profitPoints - secondTrailThreshold
+        float steps = math.floor(extraProfit / incrementalProfitStep)
+        float additionalLock = steps * incrementalSLMove
+        slLong := slLong + additionalLock  // Move SL further up
+    
+    if close < slLong
+        strategy.close("Long", comment="SL Hit")
+    if close >= longTP
+        strategy.close("Long", comment="TP Hit")
+
+// No new entries after window or if disabled
+// Already handled in conditions
+
+// Visualization
+if plotMarkers and not na(bearishMarker)
+    line.new(bar_index-1, bearishMarker, bar_index, bearishMarker, color=color.red, width=2)
+    line.new(bar_index-1, bullishMarker, bar_index, bullishMarker, color=color.green, width=2)
+
+// Plot entry shapes
+plotshape(longCondition, title="Long Entry", location=location.belowbar, style=shape.triangleup, color=color.green, size=size.small)
+plotshape(shortCondition, title="Short Entry", location=location.abovebar, style=shape.triangledown, color=color.red, size=size.small)
+
+// Labels for range and target
+if markersSet and barstate.islast
+    label.new(bar_index, high, "Range: " + str.tostring(rangePoints) + "\nTarget: " + str.tostring(profitTarget), style=label.style_label_down, color=color.blue)
+
+// Alerts
+alertcondition(longCondition, title="Long Entry Alert", message="Long Entry Triggered")
+alertcondition(shortCondition, title="Short Entry Alert", message="Short Entry Triggered")

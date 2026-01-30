@@ -1,0 +1,62 @@
+{
+  "symbol": "HYPE",
+  "interval": "1h",
+  "strategy": "RR_3:1",
+  "max_position_size": 100,
+  "risk_per_trade": 0.02,
+  "max_positions": 1,
+  "check_interval": 60,
+  "trailing_stop_activation": 0.015,
+  "strategies": {
+    "RR_3:1": {
+      "tp_percentage": 0.03,
+      "sl_percentage": 0.01,
+      "trailing": false,
+      "description": "3:1 Risk/Reward - Best performer with 21.3% return"
+    },
+    "Trailing_3%": {
+      "tp_percentage": 0.03,
+      "sl_percentage": 0.015,
+      "trailing": true,
+      "description": "3% TP with trailing stop - 18% return"
+    },
+    "Standard_2%": {
+      "tp_percentage": 0.02,
+      "sl_percentage": 0.01,
+      "trailing": false,
+      "description": "Conservative 2% TP - Most consistent 57% win rate"
+    },
+    "Aggressive_3%": {
+      "tp_percentage": 0.03,
+      "sl_percentage": 0.015,
+      "trailing": false,
+      "description": "Aggressive 3% TP with wider stop"
+    }
+  },
+  "notifications": {
+    "enabled": true,
+    "on_entry": true,
+    "on_exit": true,
+    "on_tp_hit": true,
+    "on_sl_hit": true
+  },
+  "risk_management": {
+    "max_daily_loss": 0.05,
+    "max_weekly_loss": 0.10,
+    "max_consecutive_losses": 3,
+    "pause_after_max_losses": true,
+    "cooldown_minutes": 300
+  },
+  "position_sizing": {
+    "method": "fixed_risk",
+    "confidence_scaling": true,
+    "min_confidence": 0.6,
+    "max_leverage": 3.0
+  },
+  "market_conditions": {
+    "avoid_low_volume": true,
+    "min_volume_ratio": 0.5,
+    "avoid_high_volatility": false,
+    "max_volatility": 0.05
+  }
+}
