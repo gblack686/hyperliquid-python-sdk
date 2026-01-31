@@ -4,25 +4,13 @@ View current status and performance of paper trading strategies.
 
 ## What to do
 
-1. Query the Supabase database for paper trading data:
-   - Active recommendations from `paper_recommendations` table
-   - Recent outcomes from `paper_recommendation_outcomes` table
-   - Strategy metrics from `paper_strategy_metrics` table
+Run the scheduler with --status flag:
 
-2. Run the metrics calculator to get fresh metrics:
-   ```python
-   import asyncio
-   from scripts.paper_trading.metrics_calculator import MetricsCalculator
+```bash
+python -m scripts.paper_trading.scheduler --status
+```
 
-   calc = MetricsCalculator()
-   report = calc.format_review_report(
-       ["funding_arbitrage", "grid_trading", "directional_momentum"],
-       period="24h"
-   )
-   print(report)
-   ```
-
-3. Display the results in a clear format showing:
+This will query the database and show:
    - Per-strategy performance (signals, wins, losses, P&L)
    - Combined metrics
    - Active signals with current unrealized P&L

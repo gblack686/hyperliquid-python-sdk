@@ -1,167 +1,120 @@
 """
 Grid/Box Trading Strategy
 =========================
-Generates signals based on price range detection.
-
-Logic:
-- Identify trading ranges using recent high/low
-- Buy at lower range boundary
-- Sell at upper range boundary
-- Mean reversion approach
-
-Best for sideways/consolidating markets.
+Identifies range-bound markets and generates mean reversion signals.
+- Buy at range lows (oversold)
+- Sell at range highs (overbought)
 """
 
 import os
+import logging
 import time
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-import asyncio
 import numpy as np
-
-from loguru import logger
-from dotenv import load_dotenv
+from datetime import datetime, timedelta, timezone
+from typing import List, Dict, Any, Optional
 
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
-
-from ..base_strategy import BaseStrategy, Recommendation, Direction
+from dotenv import load_dotenv
 
 load_dotenv()
 
+from ..base_strategy import BaseStrategy, Recommendation
+
+logger = logging.getLogger(__name__)
+
+# Try to import quantpylib for candle data
+try:
+    from quantpylib.wrappers.hyperliquid import Hyperliquid
+    HAS_QUANTPYLIB = True
+except ImportError:
+    HAS_QUANTPYLIB = False
+    logger.warning("quantpylib not available - using basic range detection")
+
 
 class GridStrategy(BaseStrategy):
-    """Grid/Box trading strategy - range-bound mean reversion"""
+    """Grid/range trading strategy"""
 
     def __init__(
         self,
-        lookback_hours: int = 24,
-        range_threshold_pct: float = 3.0,  # Min range size
-        entry_zone_pct: float = 0.2,  # Entry within 20% of range boundary
-        min_volume_24h: float = 500000,
-        max_signals_per_run: int = 3,
-        position_size_usd: float = 1000.0
+        lookback_hours: int = 72,        # Hours to calculate range
+        min_range_pct: float = 3.0,      # Minimum range size (%)
+        max_range_pct: float = 15.0,     # Maximum range size (%)
+        entry_threshold_pct: float = 20, # Enter when price is in bottom/top 20% of range
+        min_volume: float = 500_000,     # Minimum $500K 24h volume
+        expiry_hours: int = 24,          # 24 hour expiry
+        position_size: float = 1000.0,   # Paper position size
     ):
         """
         Initialize grid strategy.
 
         Args:
-            lookback_hours: Hours to look back for range detection
-            range_threshold_pct: Minimum range size (%) to consider tradeable
-            entry_zone_pct: How close to boundary to trigger (0.2 = 20% of range)
-            min_volume_24h: Minimum 24h volume in USD
-            max_signals_per_run: Maximum signals to generate per run
-            position_size_usd: Default position size
+            lookback_hours: Hours to look back for range calculation
+            min_range_pct: Minimum range width as percentage
+            max_range_pct: Maximum range width (avoid trending markets)
+            entry_threshold_pct: % from range edge to trigger entry
+            min_volume: Minimum 24h volume in USD
+            expiry_hours: Hours until recommendation expires
+            position_size: Paper position size in USD
         """
-        super().__init__(
-            name="grid_trading",
-            default_expiry_hours=24,
-            min_confidence=55,
-            position_size_usd=position_size_usd
-        )
+        super().__init__(name="grid_trading", expiry_hours=expiry_hours)
 
         self.lookback_hours = lookback_hours
-        self.range_threshold_pct = range_threshold_pct
-        self.entry_zone_pct = entry_zone_pct
-        self.min_volume_24h = min_volume_24h
-        self.max_signals_per_run = max_signals_per_run
+        self.min_range_pct = min_range_pct
+        self.max_range_pct = max_range_pct
+        self.entry_threshold_pct = entry_threshold_pct
+        self.min_volume = min_volume
+        self.position_size = position_size
 
-        self.info = Info(constants.MAINNET_API_URL, skip_ws=True)
+        self._hyp = None
 
-    def _get_candles(self, symbol: str, interval: str, start_time: int, end_time: int) -> List[Dict]:
-        """
-        Get candle data using the built-in Hyperliquid SDK.
-
-        Args:
-            symbol: Trading pair symbol (e.g., "BTC")
-            interval: Candle interval (e.g., "1h", "15m")
-            start_time: Start time in milliseconds
-            end_time: End time in milliseconds
-
-        Returns:
-            List of candle dictionaries with o, h, l, c, v keys
-        """
-        try:
-            raw_candles = self.info.candles_snapshot(symbol, interval, start_time, end_time)
-
-            if not raw_candles:
-                return []
-
-            # Convert SDK format to our expected format
-            candles = []
-            for c in raw_candles:
-                candles.append({
-                    "t": c.get("t", 0),  # timestamp
-                    "o": c.get("o", 0),  # open
-                    "h": c.get("h", 0),  # high
-                    "l": c.get("l", 0),  # low
-                    "c": c.get("c", 0),  # close
-                    "v": c.get("v", 0),  # volume
-                })
-
-            return candles
-
-        except Exception as e:
-            logger.debug(f"Error fetching candles for {symbol}: {e}")
-            return []
-
-    def _detect_range(self, candles: List[Dict]) -> Optional[Dict]:
-        """
-        Detect trading range from candle data.
-
-        Args:
-            candles: List of candle data with OHLCV
-
-        Returns:
-            Dictionary with range info or None if no range detected
-        """
-        if not candles or len(candles) < 10:
+    async def _get_hyp_client(self):
+        """Get or create Hyperliquid client for candle data"""
+        if not HAS_QUANTPYLIB:
             return None
 
-        highs = np.array([float(c["h"]) for c in candles])
-        lows = np.array([float(c["l"]) for c in candles])
-        closes = np.array([float(c["c"]) for c in candles])
+        if self._hyp is None:
+            try:
+                self._hyp = Hyperliquid(
+                    key=os.getenv("HYP_KEY"),
+                    secret=os.getenv("HYP_SECRET"),
+                    mode="live"
+                )
+                await self._hyp.init_client()
+            except Exception as e:
+                logger.warning(f"Could not initialize Hyperliquid client: {e}")
+                return None
 
-        # Calculate range
-        range_high = np.percentile(highs, 95)  # Use 95th percentile to filter spikes
-        range_low = np.percentile(lows, 5)
-        current_price = closes[-1]
+        return self._hyp
 
-        # Range size as percentage
-        range_size_pct = ((range_high - range_low) / range_low) * 100
+    async def get_top_symbols(self, limit: int = 10) -> List[str]:
+        """Get top symbols by 24h volume"""
+        info = Info(constants.MAINNET_API_URL, skip_ws=True)
 
-        if range_size_pct < self.range_threshold_pct:
-            return None  # Range too tight
+        try:
+            meta_and_ctxs = info.meta_and_asset_ctxs()
+            if not meta_and_ctxs or len(meta_and_ctxs) < 2:
+                return []
 
-        if range_size_pct > 15:
-            return None  # Range too wide (likely trending)
+            meta = meta_and_ctxs[0]
+            asset_ctxs = meta_and_ctxs[1]
+            universe = meta.get("universe", [])
 
-        # Calculate position within range (0 = at low, 1 = at high)
-        position_in_range = (current_price - range_low) / (range_high - range_low)
+            symbols = []
+            for i, asset in enumerate(universe):
+                ticker = asset.get("name", f"UNKNOWN_{i}")
+                ctx = asset_ctxs[i] if i < len(asset_ctxs) else {}
+                volume = float(ctx.get("dayNtlVlm", 0))
 
-        # Check for range breakout (price outside range)
-        if current_price > range_high * 1.02 or current_price < range_low * 0.98:
-            return None  # Outside range, not suitable
+                if volume >= self.min_volume:
+                    symbols.append((ticker, volume))
 
-        # Calculate average volume
-        volumes = np.array([float(c["v"]) for c in candles])
-        avg_volume = np.mean(volumes)
-        recent_volume = np.mean(volumes[-5:])
-        volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1
+            symbols.sort(key=lambda x: x[1], reverse=True)
+            return [s[0] for s in symbols[:limit]]
 
-        # Calculate RSI for mean reversion confirmation
-        rsi = self._calculate_rsi(closes, 14)
-
-        return {
-            "range_high": range_high,
-            "range_low": range_low,
-            "range_mid": (range_high + range_low) / 2,
-            "range_size_pct": range_size_pct,
-            "current_price": current_price,
-            "position_in_range": position_in_range,
-            "volume_ratio": volume_ratio,
-            "rsi": rsi
-        }
+        except Exception as e:
+            logger.error(f"Error getting top symbols: {e}")
+            return []
 
     def _calculate_rsi(self, closes: np.ndarray, period: int = 14) -> Optional[float]:
         """Calculate RSI"""
@@ -185,222 +138,201 @@ class GridStrategy(BaseStrategy):
         rs = avg_gain / avg_loss
         return 100 - (100 / (1 + rs))
 
-    async def generate_signals(self) -> List[Recommendation]:
-        """
-        Generate signals based on range boundaries.
+    async def _get_range_data(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Get price range data for a symbol"""
+        hyp = await self._get_hyp_client()
 
-        Returns:
-            List of recommendations at range extremes
-        """
-        logger.info(f"[{self.name}] Scanning for grid opportunities...")
-
-        try:
-
-            # Get market data for filtering
-            meta_and_ctxs = self.info.meta_and_asset_ctxs()
+        if not hyp:
+            # Fallback: use simple 24h range from market data
+            info = Info(constants.MAINNET_API_URL, skip_ws=True)
+            meta_and_ctxs = info.meta_and_asset_ctxs()
 
             if not meta_and_ctxs or len(meta_and_ctxs) < 2:
-                logger.error("Could not fetch market data")
+                return None
+
+            meta = meta_and_ctxs[0]
+            asset_ctxs = meta_and_ctxs[1]
+            universe = meta.get("universe", [])
+
+            for i, asset in enumerate(universe):
+                if asset.get("name") == ticker:
+                    ctx = asset_ctxs[i] if i < len(asset_ctxs) else {}
+                    mark_price = float(ctx.get("markPx", 0))
+                    prev_price = float(ctx.get("prevDayPx", 0))
+
+                    if mark_price > 0 and prev_price > 0:
+                        # Estimate range as +/- 3% from current price
+                        range_high = mark_price * 1.03
+                        range_low = mark_price * 0.97
+                        range_pct = 6.0
+
+                        return {
+                            "range_low": range_low,
+                            "range_high": range_high,
+                            "range_pct": range_pct,
+                            "current_price": mark_price,
+                            "rsi": None,
+                            "closes": None,
+                        }
+            return None
+
+        try:
+            now = int(time.time() * 1000)
+            start = now - (self.lookback_hours * 60 * 60 * 1000)
+
+            candles = await hyp.candle_historical(
+                ticker=ticker,
+                interval="1h",
+                start=start,
+                end=now
+            )
+
+            if not candles or len(candles) < 24:
+                return None
+
+            # Extract OHLC data
+            highs = np.array([float(c["h"]) for c in candles])
+            lows = np.array([float(c["l"]) for c in candles])
+            closes = np.array([float(c["c"]) for c in candles])
+
+            range_high = np.max(highs)
+            range_low = np.min(lows)
+            current_price = closes[-1]
+
+            range_pct = ((range_high - range_low) / range_low) * 100
+
+            # Calculate RSI
+            rsi = self._calculate_rsi(closes)
+
+            return {
+                "range_low": range_low,
+                "range_high": range_high,
+                "range_pct": range_pct,
+                "current_price": current_price,
+                "rsi": rsi,
+                "closes": closes,
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting range data for {ticker}: {e}")
+            return None
+
+    async def generate_recommendations(self) -> List[Recommendation]:
+        """Generate grid trading recommendations"""
+        info = Info(constants.MAINNET_API_URL, skip_ws=True)
+        recommendations = []
+
+        try:
+            logger.info("[GRID] Fetching market data...")
+            meta_and_ctxs = info.meta_and_asset_ctxs()
+
+            if not meta_and_ctxs or len(meta_and_ctxs) < 2:
+                logger.error("[GRID] Could not fetch market data")
                 return []
 
             meta = meta_and_ctxs[0]
             asset_ctxs = meta_and_ctxs[1]
             universe = meta.get("universe", [])
 
-            # Filter markets by volume
-            candidates = []
-            for i, asset in enumerate(universe):
-                ticker = asset.get("name", "")
-                ctx = asset_ctxs[i] if i < len(asset_ctxs) else {}
-                volume_24h = float(ctx.get("dayNtlVlm", 0))
-                mark_price = float(ctx.get("markPx", 0))
+            # Get top symbols by volume
+            top_symbols = await self.get_top_symbols(limit=20)
+            logger.info(f"[GRID] Analyzing {len(top_symbols)} top symbols...")
 
-                if volume_24h >= self.min_volume_24h and mark_price > 0:
-                    candidates.append({
-                        "ticker": ticker,
-                        "volume_24h": volume_24h,
-                        "mark_price": mark_price
-                    })
+            now = datetime.now(timezone.utc)
+            expires_at = now + timedelta(hours=self.expiry_hours)
 
-            # Sort by volume and take top 20
-            candidates.sort(key=lambda x: x["volume_24h"], reverse=True)
-            candidates = candidates[:20]
+            for ticker in top_symbols:
+                range_data = await self._get_range_data(ticker)
 
-            logger.info(f"[{self.name}] Analyzing {len(candidates)} candidates")
-
-            # Get active recommendations
-            active_recs = self.get_active_recommendations()
-            active_symbols = {r.symbol for r in active_recs}
-
-            recommendations = []
-            now = int(time.time() * 1000)
-            start = now - (self.lookback_hours * 60 * 60 * 1000)
-
-            for candidate in candidates:
-                ticker = candidate["ticker"]
-
-                if ticker in active_symbols:
+                if not range_data:
                     continue
 
-                if len(recommendations) >= self.max_signals_per_run:
-                    break
+                range_low = range_data["range_low"]
+                range_high = range_data["range_high"]
+                range_pct = range_data["range_pct"]
+                current_price = range_data["current_price"]
+                rsi = range_data["rsi"]
 
-                try:
-                    # Fetch candle data using built-in SDK
-                    candles = self._get_candles(ticker, "1h", start, now)
-
-                    if not candles or len(candles) < 20:
-                        continue
-
-                    # Detect range
-                    range_info = self._detect_range(candles)
-
-                    if not range_info:
-                        continue
-
-                    position = range_info["position_in_range"]
-                    rsi = range_info["rsi"]
-
-                    # Generate signal based on position in range
-                    rec = None
-
-                    # Near bottom of range (position < 0.2) -> LONG
-                    if position <= self.entry_zone_pct:
-                        # Confirm with RSI (oversold helps)
-                        confidence = 55
-
-                        if rsi and rsi < 35:
-                            confidence += 15
-                        elif rsi and rsi < 45:
-                            confidence += 10
-
-                        if range_info["volume_ratio"] > 1.2:
-                            confidence += 5
-
-                        confidence = min(confidence, 90)
-
-                        # Target is range midpoint or upper
-                        target_price = range_info["range_mid"]
-                        stop_loss = range_info["range_low"] * 0.98  # 2% below range low
-
-                        rec = self.create_recommendation(
-                            symbol=ticker,
-                            direction=Direction.LONG,
-                            entry_price=range_info["current_price"],
-                            confidence_score=confidence,
-                            target_price_1=target_price,
-                            stop_loss_price=stop_loss,
-                            strategy_params={
-                                "range_high": range_info["range_high"],
-                                "range_low": range_info["range_low"],
-                                "range_size_pct": range_info["range_size_pct"],
-                                "position_in_range": position,
-                                "rsi": rsi,
-                                "volume_24h": candidate["volume_24h"]
-                            },
-                            notes=f"At range low ({position*100:.0f}% of range), RSI: {rsi:.0f}" if rsi else f"At range low ({position*100:.0f}% of range)"
-                        )
-
-                    # Near top of range (position > 0.8) -> SHORT
-                    elif position >= (1 - self.entry_zone_pct):
-                        confidence = 55
-
-                        if rsi and rsi > 65:
-                            confidence += 15
-                        elif rsi and rsi > 55:
-                            confidence += 10
-
-                        if range_info["volume_ratio"] > 1.2:
-                            confidence += 5
-
-                        confidence = min(confidence, 90)
-
-                        target_price = range_info["range_mid"]
-                        stop_loss = range_info["range_high"] * 1.02
-
-                        rec = self.create_recommendation(
-                            symbol=ticker,
-                            direction=Direction.SHORT,
-                            entry_price=range_info["current_price"],
-                            confidence_score=confidence,
-                            target_price_1=target_price,
-                            stop_loss_price=stop_loss,
-                            strategy_params={
-                                "range_high": range_info["range_high"],
-                                "range_low": range_info["range_low"],
-                                "range_size_pct": range_info["range_size_pct"],
-                                "position_in_range": position,
-                                "rsi": rsi,
-                                "volume_24h": candidate["volume_24h"]
-                            },
-                            notes=f"At range high ({position*100:.0f}% of range), RSI: {rsi:.0f}" if rsi else f"At range high ({position*100:.0f}% of range)"
-                        )
-
-                    if rec:
-                        recommendations.append(rec)
-                        active_symbols.add(ticker)
-
-                except Exception as e:
-                    logger.debug(f"Error analyzing {ticker}: {e}")
+                # Check range is within acceptable bounds
+                if range_pct < self.min_range_pct or range_pct > self.max_range_pct:
                     continue
 
-            logger.info(f"[{self.name}] Generated {len(recommendations)} signals")
+                # Calculate position in range (0% = at low, 100% = at high)
+                position_in_range = ((current_price - range_low) / (range_high - range_low)) * 100
+
+                # Check if price is near range edges
+                direction = None
+                confidence = 50
+
+                if position_in_range <= self.entry_threshold_pct:
+                    # Price at range low - BUY
+                    direction = "LONG"
+                    # Higher confidence if RSI confirms oversold
+                    if rsi and rsi < 30:
+                        confidence = 80
+                    elif rsi and rsi < 40:
+                        confidence = 70
+                    else:
+                        confidence = 60
+
+                elif position_in_range >= (100 - self.entry_threshold_pct):
+                    # Price at range high - SELL
+                    direction = "SHORT"
+                    if rsi and rsi > 70:
+                        confidence = 80
+                    elif rsi and rsi > 60:
+                        confidence = 70
+                    else:
+                        confidence = 60
+
+                if direction:
+                    # Calculate target (range mid) and stop (beyond range)
+                    range_mid = (range_high + range_low) / 2
+
+                    if direction == "LONG":
+                        target = range_mid
+                        stop = range_low * 0.98  # 2% below range low
+                    else:
+                        target = range_mid
+                        stop = range_high * 1.02  # 2% above range high
+
+                    rec = Recommendation(
+                        strategy_name=self.name,
+                        symbol=ticker,
+                        direction=direction,
+                        entry_price=current_price,
+                        target_price_1=target,
+                        stop_loss_price=stop,
+                        confidence_score=confidence,
+                        expires_at=expires_at,
+                        position_size=self.position_size,
+                        strategy_params={
+                            "range_low": round(range_low, 4),
+                            "range_high": round(range_high, 4),
+                            "range_pct": round(range_pct, 2),
+                            "position_in_range": round(position_in_range, 1),
+                            "rsi": round(rsi, 1) if rsi else None,
+                        },
+                    )
+                    recommendations.append(rec)
+                    rsi_str = f"{rsi:.1f}" if rsi else "N/A"
+                    logger.info(
+                        f"[GRID] {direction} {ticker}: "
+                        f"pos={position_in_range:.1f}%, rsi={rsi_str}, conf={confidence}"
+                    )
+
+            logger.info(f"[GRID] Generated {len(recommendations)} recommendations")
             return recommendations
 
         except Exception as e:
-            logger.error(f"[{self.name}] Error generating signals: {e}")
-            return []
+            logger.error(f"[GRID] Error generating recommendations: {e}")
+            raise
 
-    async def get_current_prices(self, symbols: List[str]) -> Dict[str, float]:
-        """Get current prices for symbols"""
-        prices = {}
-
-        try:
-            meta_and_ctxs = self.info.meta_and_asset_ctxs()
-
-            if meta_and_ctxs and len(meta_and_ctxs) >= 2:
-                meta = meta_and_ctxs[0]
-                asset_ctxs = meta_and_ctxs[1]
-                universe = meta.get("universe", [])
-
-                for i, asset in enumerate(universe):
-                    ticker = asset.get("name", "")
-                    if ticker in symbols:
-                        ctx = asset_ctxs[i] if i < len(asset_ctxs) else {}
-                        price = float(ctx.get("markPx", 0))
-                        if price > 0:
-                            prices[ticker] = price
-
-        except Exception as e:
-            logger.error(f"Error fetching prices: {e}")
-
-        return prices
-
-
-async def test_grid_strategy():
-    """Test the grid strategy"""
-    strategy = GridStrategy(
-        lookback_hours=24,
-        range_threshold_pct=2.0,  # Lower for testing
-        max_signals_per_run=5
-    )
-
-    print("Testing Grid Strategy...")
-    print("=" * 60)
-
-    signals = await strategy.generate_signals()
-
-    print(f"\nGenerated {len(signals)} signals:\n")
-
-    for signal in signals:
-        print(f"  {signal.symbol} {signal.direction.value}")
-        print(f"    Entry: ${signal.entry_price:,.4f}")
-        print(f"    Target: ${signal.target_price_1:,.4f}" if signal.target_price_1 else "")
-        print(f"    Stop: ${signal.stop_loss_price:,.4f}" if signal.stop_loss_price else "")
-        print(f"    Confidence: {signal.confidence_score}/100")
-        print(f"    Notes: {signal.notes}")
-        print()
-
-
-if __name__ == "__main__":
-    asyncio.run(test_grid_strategy())
+        finally:
+            # Cleanup Hyperliquid client
+            if self._hyp:
+                try:
+                    await self._hyp.cleanup()
+                except Exception:
+                    pass
+                self._hyp = None

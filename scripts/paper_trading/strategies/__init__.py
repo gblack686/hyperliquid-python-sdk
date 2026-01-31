@@ -1,7 +1,7 @@
 """
 Paper Trading Strategies
 ========================
-Strategy implementations for paper trading system.
+Strategy implementations for the paper trading system.
 """
 
 from .funding_strategy import FundingStrategy

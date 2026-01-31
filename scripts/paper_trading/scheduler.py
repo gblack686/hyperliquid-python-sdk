@@ -1,368 +1,398 @@
+#!/usr/bin/env python3
 """
 Paper Trading Scheduler
 =======================
 Runs paper trading strategies on a schedule using APScheduler.
 
 Usage:
+    # Run continuously (every 15 minutes)
     python -m scripts.paper_trading.scheduler
 
-Or programmatically:
-    from scripts.paper_trading.scheduler import PaperTradingScheduler
-    scheduler = PaperTradingScheduler()
-    scheduler.start()
+    # Run once and exit
+    python -m scripts.paper_trading.scheduler --once
+
+    # Check status
+    python -m scripts.paper_trading.scheduler --status
+
+    # Generate review report
+    python -m scripts.paper_trading.scheduler --review
 """
 
 import os
 import sys
 import asyncio
-import signal
-from datetime import datetime, timedelta
-from typing import List, Optional
+import argparse
+import logging
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
 
-from loguru import logger
 from dotenv import load_dotenv
 
+load_dotenv()
+
+# Add project root to path
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, project_root)
+
+from hyperliquid.info import Info
+from hyperliquid.utils import constants
+
+from scripts.paper_trading.base_strategy import Recommendation
+from scripts.paper_trading.metrics_calculator import MetricsCalculator
+from scripts.paper_trading.strategies import (
+    FundingStrategy,
+    GridStrategy,
+    DirectionalStrategy,
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+# Try to import APScheduler
 try:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.interval import IntervalTrigger
-    from apscheduler.triggers.cron import CronTrigger
     HAS_APSCHEDULER = True
 except ImportError:
     HAS_APSCHEDULER = False
-    logger.warning("APScheduler not installed - run: pip install apscheduler")
+    logger.warning("APScheduler not installed - continuous mode disabled")
 
-from .base_strategy import BaseStrategy, Recommendation
-from .metrics_calculator import MetricsCalculator
-from .strategies import FundingStrategy, GridStrategy, DirectionalStrategy
-
-# Optional Telegram integration
+# Try to import Telegram alerts
 try:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
     from integrations.telegram.alerts import TelegramAlerts, AlertPriority
     HAS_TELEGRAM = True
 except ImportError:
     HAS_TELEGRAM = False
-    logger.info("Telegram integration not available")
-
-load_dotenv()
+    logger.warning("Telegram integration not available")
 
 
 class PaperTradingScheduler:
-    """
-    Scheduler for paper trading strategies.
-
-    Runs strategies every 15 minutes, checks outcomes hourly,
-    and generates daily review reports.
-    """
-
-    STRATEGY_NAMES = [
-        "funding_arbitrage",
-        "grid_trading",
-        "directional_momentum"
-    ]
+    """Scheduler for paper trading strategies"""
 
     def __init__(
         self,
+        enable_telegram: bool = True,
         signal_interval_minutes: int = 15,
-        outcome_check_minutes: int = 15,
-        metrics_update_minutes: int = 60,
-        daily_review_hour: int = 0,  # UTC hour for daily review
-        enable_telegram: bool = True
+        outcome_check_interval_minutes: int = 5,
+        metrics_interval_minutes: int = 60,
     ):
         """
         Initialize scheduler.
 
         Args:
-            signal_interval_minutes: How often to run strategies
-            outcome_check_minutes: How often to check for outcomes
-            metrics_update_minutes: How often to update metrics
-            daily_review_hour: UTC hour for daily review (0-23)
-            enable_telegram: Whether to send Telegram alerts
+            enable_telegram: Send alerts to Telegram
+            signal_interval_minutes: Minutes between signal generation runs
+            outcome_check_interval_minutes: Minutes between outcome checks
+            metrics_interval_minutes: Minutes between metrics updates
         """
-        if not HAS_APSCHEDULER:
-            raise ImportError("APScheduler required - run: pip install apscheduler")
-
+        self.enable_telegram = enable_telegram and HAS_TELEGRAM
         self.signal_interval = signal_interval_minutes
-        self.outcome_check_interval = outcome_check_minutes
-        self.metrics_update_interval = metrics_update_minutes
-        self.daily_review_hour = daily_review_hour
+        self.outcome_check_interval = outcome_check_interval_minutes
+        self.metrics_interval = metrics_interval_minutes
 
         # Initialize strategies
-        self.strategies: List[BaseStrategy] = [
+        self.strategies = [
             FundingStrategy(
                 min_funding_rate=0.01,
-                max_signals_per_run=3
+                min_volume=100_000,
+                expiry_hours=8,
             ),
             GridStrategy(
-                lookback_hours=24,
-                max_signals_per_run=3
+                lookback_hours=72,
+                min_range_pct=3.0,
+                max_range_pct=15.0,
+                entry_threshold_pct=20,
+                min_volume=500_000,
+                expiry_hours=24,
             ),
             DirectionalStrategy(
-                min_score=60,
-                max_signals_per_run=3
-            )
+                min_change_pct=3.0,
+                min_volume=500_000,
+                min_score=50,
+                expiry_hours=24,
+            ),
         ]
 
         self.metrics_calculator = MetricsCalculator()
-        self.scheduler = AsyncIOScheduler()
+        self.telegram = TelegramAlerts() if self.enable_telegram else None
+        self.scheduler = None
 
-        # Telegram
-        self.telegram: Optional[TelegramAlerts] = None
-        if enable_telegram and HAS_TELEGRAM:
-            self.telegram = TelegramAlerts()
-            if not self.telegram.config.is_valid:
-                logger.warning("Telegram not configured - alerts disabled")
-                self.telegram = None
+    async def run_all_strategies(self) -> List[Recommendation]:
+        """Run all strategies and return recommendations"""
+        all_recommendations = []
 
-        self._running = False
-
-    async def _run_strategies(self):
-        """Run all strategies and generate signals"""
-        logger.info("Running paper trading strategies...")
+        logger.info("=" * 60)
+        logger.info("PAPER TRADING - SIGNAL GENERATION")
+        logger.info(f"Time: {datetime.now(timezone.utc).isoformat()}")
+        logger.info("=" * 60)
 
         for strategy in self.strategies:
             try:
-                signals = await strategy.generate_signals()
+                logger.info(f"Running {strategy.name}...")
+                recommendations = await strategy.run()
+                all_recommendations.extend(recommendations)
 
-                for signal in signals:
-                    # Save to database
-                    rec_id = strategy.save_recommendation(signal)
-
-                    if rec_id:
-                        signal.id = rec_id
-                        logger.info(f"Saved signal: {signal.symbol} {signal.direction.value} (ID: {rec_id})")
-
-                        # Send Telegram alert
-                        if self.telegram:
-                            try:
-                                msg = signal.format_telegram_signal()
-                                await self.telegram.send(msg, AlertPriority.MEDIUM)
-                            except Exception as e:
-                                logger.error(f"Telegram error: {e}")
+                # Send Telegram alerts for each recommendation
+                if self.telegram and recommendations:
+                    for rec in recommendations:
+                        message = rec.format_telegram_signal()
+                        await self.telegram.send(message, AlertPriority.MEDIUM)
+                        logger.info(f"Sent Telegram alert for {rec.symbol}")
 
             except Exception as e:
                 logger.error(f"Error running {strategy.name}: {e}")
 
-        logger.info("Strategy run complete")
+        logger.info(f"Total recommendations: {len(all_recommendations)}")
+        return all_recommendations
 
-    async def _check_outcomes(self):
-        """Check active recommendations for outcomes"""
-        logger.info("Checking for signal outcomes...")
+    async def check_all_outcomes(self) -> List[Dict]:
+        """Check outcomes for all strategies"""
+        all_outcomes = []
+
+        # Get current prices
+        prices = await self._get_current_prices()
+        if not prices:
+            logger.warning("Could not fetch current prices")
+            return []
 
         for strategy in self.strategies:
             try:
-                outcomes = await strategy.check_outcomes()
+                outcomes = await strategy.check_outcomes(prices)
+                all_outcomes.extend(outcomes)
 
-                for outcome in outcomes:
-                    rec = outcome["recommendation"]
+                # Send Telegram alerts for outcomes
+                if self.telegram and outcomes:
+                    for outcome in outcomes:
+                        rec_data = outcome.get("recommendation", {})
 
-                    logger.info(
-                        f"Outcome: {rec.symbol} {outcome['outcome_type']} "
-                        f"{outcome['pnl_pct']:+.2f}%"
-                    )
+                        # Reconstruct Recommendation for formatting
+                        rec = Recommendation(
+                            strategy_name=rec_data.get("strategy_name", ""),
+                            symbol=rec_data.get("symbol", ""),
+                            direction=rec_data.get("direction", ""),
+                            entry_price=float(rec_data.get("entry_price", 0)),
+                            target_price_1=float(rec_data.get("target_price_1", 0)),
+                            stop_loss_price=float(rec_data.get("stop_loss_price", 0)),
+                            confidence_score=int(rec_data.get("confidence_score", 0)),
+                            expires_at=datetime.now(timezone.utc),
+                            strategy_params=rec_data.get("strategy_params", {}),
+                        )
 
-                    # Send Telegram alert
-                    if self.telegram:
-                        try:
-                            msg = rec.format_telegram_outcome(
-                                outcome_type=outcome["outcome_type"],
-                                exit_price=outcome["exit_price"],
-                                pnl_pct=outcome["pnl_pct"],
-                                duration_minutes=outcome["duration_minutes"]
-                            )
-                            priority = (
-                                AlertPriority.HIGH
-                                if abs(outcome["pnl_pct"]) > 2
-                                else AlertPriority.MEDIUM
-                            )
-                            await self.telegram.send(msg, priority)
-                        except Exception as e:
-                            logger.error(f"Telegram error: {e}")
+                        message = rec.format_telegram_outcome(
+                            outcome_type=outcome.get("outcome_type", ""),
+                            exit_price=float(outcome.get("exit_price", 0)),
+                            pnl_pct=float(outcome.get("pnl_pct", 0)),
+                            pnl_amount=float(outcome.get("pnl_usd", 0)),
+                            hold_duration_minutes=int(outcome.get("hold_duration_minutes", 0)),
+                        )
+                        await self.telegram.send(message, AlertPriority.HIGH)
+                        logger.info(
+                            f"Outcome: {rec_data.get('symbol')} -> {outcome.get('outcome_type')} "
+                            f"({outcome.get('pnl_pct', 0):+.2f}%)"
+                        )
 
             except Exception as e:
                 logger.error(f"Error checking outcomes for {strategy.name}: {e}")
 
-        logger.info("Outcome check complete")
+        return all_outcomes
 
-    async def _update_metrics(self):
-        """Update strategy metrics"""
-        logger.info("Updating strategy metrics...")
-
+    async def update_metrics(self):
+        """Update strategy performance metrics"""
         try:
-            self.metrics_calculator.update_all_metrics(self.STRATEGY_NAMES)
+            logger.info("Updating metrics...")
+            await self.metrics_calculator.calculate_all_metrics()
             logger.info("Metrics updated")
         except Exception as e:
             logger.error(f"Error updating metrics: {e}")
 
-    async def _daily_review(self):
-        """Generate and send daily review"""
-        logger.info("Generating daily review...")
-
+    async def _get_current_prices(self) -> Dict[str, float]:
+        """Get current prices for all symbols"""
         try:
-            # Generate report
-            report = self.metrics_calculator.format_review_report(
-                self.STRATEGY_NAMES,
-                period="24h"
-            )
+            info = Info(constants.MAINNET_API_URL, skip_ws=True)
+            meta_and_ctxs = info.meta_and_asset_ctxs()
 
-            logger.info(f"\n{report}")
+            if not meta_and_ctxs or len(meta_and_ctxs) < 2:
+                return {}
 
-            # Send to Telegram
-            if self.telegram:
-                telegram_summary = self.metrics_calculator.format_telegram_summary(
-                    self.STRATEGY_NAMES,
-                    period="24h"
-                )
-                await self.telegram.send(telegram_summary, AlertPriority.LOW)
+            meta = meta_and_ctxs[0]
+            asset_ctxs = meta_and_ctxs[1]
+            universe = meta.get("universe", [])
+
+            prices = {}
+            for i, asset in enumerate(universe):
+                ticker = asset.get("name", f"UNKNOWN_{i}")
+                ctx = asset_ctxs[i] if i < len(asset_ctxs) else {}
+                mark_price = float(ctx.get("markPx", 0))
+                if mark_price > 0:
+                    prices[ticker] = mark_price
+
+            return prices
 
         except Exception as e:
-            logger.error(f"Error generating daily review: {e}")
+            logger.error(f"Error fetching prices: {e}")
+            return {}
+
+    async def run_once(self):
+        """Run all tasks once"""
+        await self.run_all_strategies()
+        await self.check_all_outcomes()
+        await self.update_metrics()
+
+    async def get_status(self) -> Dict:
+        """Get current status"""
+        status = {
+            "strategies": [],
+            "telegram_enabled": self.enable_telegram,
+            "scheduler_running": self.scheduler is not None and self.scheduler.running if self.scheduler else False,
+        }
+
+        for strategy in self.strategies:
+            active = await strategy.get_active_recommendations()
+            status["strategies"].append({
+                "name": strategy.name,
+                "active_recommendations": len(active),
+            })
+
+        return status
+
+    async def generate_review(self) -> str:
+        """Generate 24h review report"""
+        review = await self.metrics_calculator.get_daily_review()
+        return self.metrics_calculator.format_review_report(review)
+
+    async def send_daily_review(self):
+        """Send daily review to Telegram"""
+        if not self.telegram:
+            return
+
+        try:
+            report = await self.generate_review()
+            await self.telegram.send(report, AlertPriority.LOW)
+            logger.info("Daily review sent to Telegram")
+        except Exception as e:
+            logger.error(f"Error sending daily review: {e}")
 
     def start(self):
         """Start the scheduler"""
-        if self._running:
-            logger.warning("Scheduler already running")
+        if not HAS_APSCHEDULER:
+            logger.error("APScheduler not installed. Install with: pip install apscheduler")
             return
 
-        logger.info("Starting Paper Trading Scheduler")
-        logger.info(f"  Signal generation: every {self.signal_interval} minutes")
-        logger.info(f"  Outcome checks: every {self.outcome_check_interval} minutes")
-        logger.info(f"  Metrics update: every {self.metrics_update_interval} minutes")
-        logger.info(f"  Daily review: {self.daily_review_hour}:00 UTC")
-        logger.info(f"  Telegram alerts: {'enabled' if self.telegram else 'disabled'}")
+        self.scheduler = AsyncIOScheduler()
 
-        # Schedule jobs
+        # Schedule signal generation every 15 minutes
         self.scheduler.add_job(
-            self._run_strategies,
+            self.run_all_strategies,
             IntervalTrigger(minutes=self.signal_interval),
-            id="run_strategies",
-            name="Generate trading signals"
+            id="signal_generation",
+            name="Generate trading signals",
+            replace_existing=True,
         )
 
+        # Schedule outcome checking every 5 minutes
         self.scheduler.add_job(
-            self._check_outcomes,
+            self.check_all_outcomes,
             IntervalTrigger(minutes=self.outcome_check_interval),
-            id="check_outcomes",
-            name="Check signal outcomes"
+            id="outcome_check",
+            name="Check trade outcomes",
+            replace_existing=True,
         )
 
+        # Schedule metrics update every hour
         self.scheduler.add_job(
-            self._update_metrics,
-            IntervalTrigger(minutes=self.metrics_update_interval),
-            id="update_metrics",
-            name="Update strategy metrics"
+            self.update_metrics,
+            IntervalTrigger(minutes=self.metrics_interval),
+            id="metrics_update",
+            name="Update metrics",
+            replace_existing=True,
         )
 
+        # Schedule daily review at midnight UTC
         self.scheduler.add_job(
-            self._daily_review,
-            CronTrigger(hour=self.daily_review_hour, minute=0),
+            self.send_daily_review,
+            "cron",
+            hour=0,
+            minute=0,
             id="daily_review",
-            name="Daily performance review"
+            name="Send daily review",
+            replace_existing=True,
         )
 
-        self._running = True
         self.scheduler.start()
+        logger.info("Paper trading scheduler started")
+        logger.info(f"  - Signals: every {self.signal_interval} minutes")
+        logger.info(f"  - Outcomes: every {self.outcome_check_interval} minutes")
+        logger.info(f"  - Metrics: every {self.metrics_interval} minutes")
+        logger.info(f"  - Daily review: 00:00 UTC")
 
     def stop(self):
         """Stop the scheduler"""
-        if not self._running:
-            return
-
-        logger.info("Stopping Paper Trading Scheduler")
-        self.scheduler.shutdown(wait=False)
-        self._running = False
-
-    async def run_once(self):
-        """Run a single iteration (for testing)"""
-        logger.info("Running single paper trading iteration...")
-
-        await self._run_strategies()
-        await self._check_outcomes()
-        await self._update_metrics()
-
-        logger.info("Single iteration complete")
-
-    async def run_review(self, period: str = "24h"):
-        """Run review report (for testing or on-demand)"""
-        report = self.metrics_calculator.format_review_report(
-            self.STRATEGY_NAMES,
-            period=period
-        )
-        print(report)
-
-        if self.telegram:
-            telegram_summary = self.metrics_calculator.format_telegram_summary(
-                self.STRATEGY_NAMES,
-                period=period
-            )
-            await self.telegram.send(telegram_summary, AlertPriority.LOW)
+        if self.scheduler:
+            self.scheduler.shutdown()
+            logger.info("Scheduler stopped")
 
 
 async def main():
     """Main entry point"""
-    import argparse
-
     parser = argparse.ArgumentParser(description="Paper Trading Scheduler")
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Run a single iteration and exit"
-    )
-    parser.add_argument(
-        "--review",
-        type=str,
-        choices=["24h", "7d", "30d", "all_time"],
-        help="Generate review report for period"
-    )
-    parser.add_argument(
-        "--interval",
-        type=int,
-        default=15,
-        help="Signal generation interval in minutes (default: 15)"
-    )
-    parser.add_argument(
-        "--no-telegram",
-        action="store_true",
-        help="Disable Telegram alerts"
-    )
+    parser.add_argument("--once", action="store_true", help="Run once and exit")
+    parser.add_argument("--status", action="store_true", help="Show status and exit")
+    parser.add_argument("--review", action="store_true", help="Generate 24h review and exit")
+    parser.add_argument("--no-telegram", action="store_true", help="Disable Telegram alerts")
     args = parser.parse_args()
 
     scheduler = PaperTradingScheduler(
-        signal_interval_minutes=args.interval,
-        enable_telegram=not args.no_telegram
+        enable_telegram=not args.no_telegram,
     )
 
+    if args.status:
+        status = await scheduler.get_status()
+        print("\n=== PAPER TRADING STATUS ===")
+        print(f"Telegram: {'Enabled' if status['telegram_enabled'] else 'Disabled'}")
+        print(f"Scheduler: {'Running' if status['scheduler_running'] else 'Stopped'}")
+        print("\nStrategies:")
+        for s in status["strategies"]:
+            print(f"  - {s['name']}: {s['active_recommendations']} active")
+        return
+
     if args.review:
-        await scheduler.run_review(args.review)
+        report = await scheduler.generate_review()
+        print("\n" + report)
         return
 
     if args.once:
+        print("\nRunning paper trading cycle once...")
         await scheduler.run_once()
+        print("\nDone!")
         return
 
-    # Run continuously
+    # Continuous mode
+    if not HAS_APSCHEDULER:
+        print("ERROR: APScheduler not installed")
+        print("Install with: pip install apscheduler")
+        sys.exit(1)
+
+    print("\n=== PAPER TRADING SCHEDULER ===")
+    print("Starting continuous operation...")
+    print("Press Ctrl+C to stop\n")
+
+    # Run initial cycle
+    await scheduler.run_once()
+
+    # Start scheduler
     scheduler.start()
-
-    # Handle shutdown
-    loop = asyncio.get_event_loop()
-
-    def shutdown_handler():
-        logger.info("Shutdown signal received")
-        scheduler.stop()
-        loop.stop()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, shutdown_handler)
-        except NotImplementedError:
-            # Windows doesn't support add_signal_handler
-            pass
 
     try:
         # Keep running
-        while scheduler._running:
+        while True:
             await asyncio.sleep(1)
     except KeyboardInterrupt:
+        print("\nShutting down...")
         scheduler.stop()
 
 

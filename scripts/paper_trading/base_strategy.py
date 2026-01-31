@@ -1,558 +1,498 @@
 """
 Base Strategy Module
 ====================
-Provides base classes and utilities for paper trading strategies.
+Provides the base class and data structures for paper trading strategies.
 """
 
 import os
-import re
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Optional, List, Dict, Any
-import json
+from typing import List, Optional, Dict, Any
 
-from dotenv import load_dotenv
-from loguru import logger
 from supabase import create_client, Client
+from dotenv import load_dotenv
 
 load_dotenv()
 
-
-def parse_iso_datetime(dt_str: str) -> datetime:
-    """
-    Parse ISO datetime string handling various formats from Supabase.
-    Python's fromisoformat() only handles 0, 3, or 6 decimal places.
-    """
-    if not dt_str:
-        return None
-
-    # Replace Z with +00:00
-    dt_str = dt_str.replace("Z", "+00:00")
-
-    # Normalize microseconds to 6 digits
-    # Match the pattern: .XXXXX+ where X is a digit (variable length decimals)
-    match = re.search(r'\.(\d+)([+-])', dt_str)
-    if match:
-        decimals = match.group(1)
-        sign = match.group(2)
-        # Pad or truncate to 6 digits
-        normalized = decimals[:6].ljust(6, '0')
-        dt_str = dt_str[:match.start()] + '.' + normalized + sign + dt_str[match.end():]
-
-    return datetime.fromisoformat(dt_str)
+logger = logging.getLogger(__name__)
 
 
 class RecommendationStatus(Enum):
-    """Status of a paper trading recommendation"""
+    """Status of a trading recommendation"""
     ACTIVE = "ACTIVE"
     TARGET_HIT = "TARGET_HIT"
     STOPPED = "STOPPED"
     EXPIRED = "EXPIRED"
-    CANCELLED = "CANCELLED"
 
 
-class Direction(Enum):
-    """Trade direction"""
-    LONG = "LONG"
-    SHORT = "SHORT"
-    HOLD = "HOLD"
+# Strategy display names (ASCII only, no emoji)
+STRATEGY_DISPLAY = {
+    "funding_arbitrage": "FUNDING ARBITRAGE",
+    "grid_trading": "GRID TRADING",
+    "directional_momentum": "MOMENTUM SIGNAL",
+}
 
 
 @dataclass
 class Recommendation:
-    """Paper trading recommendation"""
+    """Trading recommendation from a strategy agent"""
     strategy_name: str
     symbol: str
-    direction: Direction
+    direction: str  # LONG, SHORT, HOLD
     entry_price: float
+    target_price_1: float
+    stop_loss_price: float
     confidence_score: int  # 0-100
-
-    # Optional price targets
-    target_price_1: Optional[float] = None
-    target_price_2: Optional[float] = None
-    stop_loss_price: Optional[float] = None
-
-    # Metadata
-    expires_at: Optional[datetime] = None
+    expires_at: datetime
+    position_size: float = 1000.0
     strategy_params: Dict[str, Any] = field(default_factory=dict)
-    notes: Optional[str] = None
 
-    # Set on save
+    # Set after saving
     id: Optional[str] = None
     created_at: Optional[datetime] = None
-    status: RecommendationStatus = RecommendationStatus.ACTIVE
+    status: str = "ACTIVE"
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for database insert"""
-        data = {
-            "strategy_name": self.strategy_name,
-            "symbol": self.symbol,
-            "direction": self.direction.value if isinstance(self.direction, Direction) else self.direction,
-            "entry_price": self.entry_price,
-            "confidence_score": self.confidence_score,
-            "target_price_1": self.target_price_1,
-            "target_price_2": self.target_price_2,
-            "stop_loss_price": self.stop_loss_price,
-            "strategy_params": self.strategy_params,
-            "notes": self.notes,
-            "status": self.status.value if isinstance(self.status, RecommendationStatus) else self.status,
-        }
+    @property
+    def target_pct(self) -> float:
+        """Calculate target percentage from entry"""
+        if self.entry_price == 0:
+            return 0
+        return ((self.target_price_1 - self.entry_price) / self.entry_price) * 100
 
-        if self.expires_at:
-            data["expires_at"] = self.expires_at.isoformat()
+    @property
+    def stop_pct(self) -> float:
+        """Calculate stop loss percentage from entry"""
+        if self.entry_price == 0:
+            return 0
+        return ((self.stop_loss_price - self.entry_price) / self.entry_price) * 100
 
-        return data
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Recommendation":
-        """Create from database row"""
-        return cls(
-            id=data.get("id"),
-            created_at=parse_iso_datetime(data["created_at"]) if data.get("created_at") else None,
-            strategy_name=data["strategy_name"],
-            symbol=data["symbol"],
-            direction=Direction(data["direction"]),
-            entry_price=float(data["entry_price"]),
-            confidence_score=int(data["confidence_score"]),
-            target_price_1=float(data["target_price_1"]) if data.get("target_price_1") else None,
-            target_price_2=float(data["target_price_2"]) if data.get("target_price_2") else None,
-            stop_loss_price=float(data["stop_loss_price"]) if data.get("stop_loss_price") else None,
-            expires_at=parse_iso_datetime(data["expires_at"]) if data.get("expires_at") else None,
-            strategy_params=data.get("strategy_params", {}),
-            notes=data.get("notes"),
-            status=RecommendationStatus(data["status"]),
-        )
-
-    def calculate_pnl_pct(self, current_price: float) -> float:
-        """Calculate unrealized P&L percentage"""
-        if self.direction == Direction.LONG:
-            return ((current_price - self.entry_price) / self.entry_price) * 100
-        elif self.direction == Direction.SHORT:
-            return ((self.entry_price - current_price) / self.entry_price) * 100
-        return 0.0
+    @property
+    def risk_reward(self) -> float:
+        """Calculate risk/reward ratio"""
+        risk = abs(self.stop_pct)
+        reward = abs(self.target_pct)
+        if risk == 0:
+            return 0
+        return reward / risk
 
     def format_telegram_signal(self) -> str:
-        """Format recommendation for Telegram alert"""
-        direction_str = self.direction.value
+        """Format recommendation as enhanced Telegram message (ASCII only)"""
+        display_name = STRATEGY_DISPLAY.get(self.strategy_name, self.strategy_name.upper())
 
-        # Calculate R:R ratio if we have target and stop
-        rr_str = ""
-        if self.target_price_1 and self.stop_loss_price:
-            if self.direction == Direction.LONG:
-                risk = self.entry_price - self.stop_loss_price
-                reward = self.target_price_1 - self.entry_price
+        # Basic info
+        target_pct = self.target_pct
+        stop_pct = self.stop_pct
+        rr = self.risk_reward
+
+        # Calculate expiry hours
+        now = datetime.now(timezone.utc)
+        expires = self.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        expiry_hours = max(0, (expires - now).total_seconds() / 3600)
+
+        # Base message
+        lines = [
+            f"[PAPER] {display_name}",
+            "-" * 20,
+            f"{self.symbol} {self.direction} | Confidence: {self.confidence_score}/100",
+            "",
+            f"Entry: ${self.entry_price:,.4f}",
+            f"Target: ${self.target_price_1:,.4f} ({target_pct:+.1f}%)",
+            f"Stop: ${self.stop_loss_price:,.4f} ({stop_pct:+.1f}%)",
+            f"R:R: {rr:.1f}x",
+        ]
+
+        # Strategy-specific data
+        params = self.strategy_params
+
+        if self.strategy_name == "funding_arbitrage":
+            funding_8h = params.get("funding_8h", 0)
+            funding_apy = params.get("funding_apy", 0)
+            open_interest = params.get("open_interest", 0)
+
+            lines.extend([
+                "",
+                "FUNDING DATA:",
+                f"  8h Rate: {funding_8h:+.4f}%",
+                f"  APY: {funding_apy:+.1f}%",
+                f"  OI: ${open_interest/1e6:.1f}M" if open_interest > 0 else "  OI: N/A",
+                "",
+                "Strategy: Collect funding payments",
+            ])
+
+        elif self.strategy_name == "grid_trading":
+            range_low = params.get("range_low", 0)
+            range_high = params.get("range_high", 0)
+            range_pct = params.get("range_pct", 0)
+            position_in_range = params.get("position_in_range", 50)
+            rsi = params.get("rsi")
+
+            lines.extend([
+                "",
+                "RANGE DATA:",
+                f"  Range: ${range_low:,.2f} - ${range_high:,.2f} ({range_pct:.1f}%)",
+                f"  Position: {'At range LOW' if position_in_range < 30 else 'At range HIGH' if position_in_range > 70 else 'Mid range'} ({position_in_range:.0f}%)",
+                f"  RSI(14): {rsi:.0f}" + (" (oversold)" if rsi and rsi < 30 else " (overbought)" if rsi and rsi > 70 else "") if rsi else "  RSI: N/A",
+                "",
+                "Strategy: Mean reversion to range mid",
+            ])
+
+        elif self.strategy_name == "directional_momentum":
+            change_24h = params.get("change_24h", 0)
+            score = params.get("score", 0)
+            rsi = params.get("rsi")
+            ema_status = params.get("ema_status", "N/A")
+            volume_ratio = params.get("volume_ratio")
+
+            lines.extend([
+                "",
+                "MOMENTUM DATA:",
+                f"  24h Change: {change_24h:+.1f}%",
+                f"  Score: {score}/100",
+                f"  RSI(14): {rsi:.0f}" if rsi else "  RSI: N/A",
+                f"  EMA: {ema_status}",
+                f"  Volume: {volume_ratio:.1f}x avg" if volume_ratio else "  Volume: N/A",
+                "",
+                "Strategy: Trend following",
+            ])
+
+        lines.append(f"Expires: {expiry_hours:.0f}h")
+
+        return "\n".join(lines)
+
+    def format_telegram_outcome(self, outcome_type: str, exit_price: float,
+                                 pnl_pct: float, pnl_amount: float,
+                                 hold_duration_minutes: int) -> str:
+        """Format outcome as enhanced Telegram message (ASCII only)"""
+        display_name = STRATEGY_DISPLAY.get(self.strategy_name, self.strategy_name.upper())
+
+        # Outcome icons (ASCII only)
+        outcome_icons = {
+            "TARGET_HIT": "[OK]",
+            "STOPPED": "[-]",
+            "EXPIRED": "[!]",
+        }
+        icon = outcome_icons.get(outcome_type, "[?]")
+
+        # Duration formatting
+        hours = hold_duration_minutes // 60
+        minutes = hold_duration_minutes % 60
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+        # Base message
+        lines = [
+            f"[RESULT] {display_name}",
+            "-" * 20,
+            f"{self.symbol} {self.direction} -> {outcome_type.replace('_', ' ')} {icon}",
+            "",
+            f"P&L: {pnl_pct:+.2f}% (${pnl_amount:+.2f})",
+            f"Duration: {duration_str}",
+            f"Exit: ${exit_price:,.4f}",
+        ]
+
+        # Original setup from strategy_params
+        params = self.strategy_params
+        lines.append("")
+        lines.append("Original Setup:")
+
+        if self.strategy_name == "funding_arbitrage":
+            funding_8h = params.get("funding_8h", 0)
+            lines.extend([
+                f"  8h Funding: {funding_8h:+.4f}%",
+                f"  Entry: ${self.entry_price:,.4f}",
+            ])
+
+        elif self.strategy_name == "grid_trading":
+            range_low = params.get("range_low", 0)
+            range_high = params.get("range_high", 0)
+            position_in_range = params.get("position_in_range", 50)
+            rsi = params.get("rsi")
+            lines.extend([
+                f"  Range: ${range_low:,.2f} - ${range_high:,.2f}",
+                f"  Position: {position_in_range:.0f}% of range",
+                f"  RSI: {rsi:.0f}" if rsi else "  RSI: N/A",
+            ])
+
+        elif self.strategy_name == "directional_momentum":
+            change_24h = params.get("change_24h", 0)
+            score = params.get("score", 0)
+            rsi = params.get("rsi")
+            lines.extend([
+                f"  24h Change: {change_24h:+.1f}%",
+                f"  Score: {score}/100",
+                f"  RSI: {rsi:.0f}" if rsi else "  RSI: N/A",
+            ])
+
+        # Contextual note based on outcome
+        lines.append("")
+        if outcome_type == "TARGET_HIT":
+            lines.append("Target reached successfully")
+        elif outcome_type == "STOPPED":
+            if self.strategy_name == "grid_trading":
+                lines.append("Range broke down - trend shift?")
             else:
-                risk = self.stop_loss_price - self.entry_price
-                reward = self.entry_price - self.target_price_1
+                lines.append("Stop loss triggered")
+        elif outcome_type == "EXPIRED":
+            lines.append("Signal expired without hitting target or stop")
 
-            if risk > 0:
-                rr = reward / risk
-                rr_str = f"\nR:R: {rr:.1f}x"
-
-        # Calculate target and stop percentages
-        target_pct = ""
-        stop_pct = ""
-        if self.target_price_1:
-            pct = ((self.target_price_1 - self.entry_price) / self.entry_price) * 100
-            if self.direction == Direction.SHORT:
-                pct = -pct
-            sign = "+" if pct > 0 else ""
-            target_pct = f" ({sign}{pct:.1f}%)"
-
-        if self.stop_loss_price:
-            pct = ((self.stop_loss_price - self.entry_price) / self.entry_price) * 100
-            if self.direction == Direction.SHORT:
-                pct = -pct
-            sign = "+" if pct > 0 else ""
-            stop_pct = f" ({sign}{pct:.1f}%)"
-
-        msg = f"*PAPER SIGNAL*: {self.symbol} {direction_str}\n"
-        msg += f"Strategy: {self.strategy_name}\n"
-        msg += f"Entry: ${self.entry_price:,.4f}\n"
-
-        if self.target_price_1:
-            msg += f"Target: ${self.target_price_1:,.4f}{target_pct}\n"
-        if self.stop_loss_price:
-            msg += f"Stop: ${self.stop_loss_price:,.4f}{stop_pct}\n"
-
-        msg += f"Confidence: {self.confidence_score}/100{rr_str}"
-
-        return msg
-
-    def format_telegram_outcome(self, outcome_type: str, exit_price: float, pnl_pct: float, duration_minutes: int) -> str:
-        """Format outcome for Telegram alert"""
-        hours = duration_minutes // 60
-        minutes = duration_minutes % 60
-        duration_str = f"{hours}h {minutes}m" if hours else f"{minutes}m"
-
-        pnl_usd = pnl_pct / 100 * 1000  # Assuming $1000 position
-        sign = "+" if pnl_pct >= 0 else ""
-
-        msg = f"*SIGNAL RESULT*: {self.symbol} {self.direction.value}\n"
-        msg += f"Outcome: {outcome_type.replace('_', ' ')}\n"
-        msg += f"P&L: {sign}{pnl_pct:.2f}% (${pnl_usd:+.2f})\n"
-        msg += f"Duration: {duration_str}"
-
-        return msg
+        return "\n".join(lines)
 
 
-class SupabasePaperTrading:
-    """Supabase client for paper trading operations"""
+class BaseStrategy(ABC):
+    """Base class for all paper trading strategies"""
 
-    def __init__(self):
-        self.url = os.getenv("SUPABASE_URL")
-        self.key = os.getenv("SUPABASE_KEY")
+    def __init__(self, name: str, expiry_hours: int = 24):
+        """
+        Initialize strategy.
 
-        if not self.url or not self.key:
-            logger.warning("Supabase credentials not set - paper trading will not persist to database")
-            self.client = None
-        else:
-            self.client: Client = create_client(self.url, self.key)
-            logger.info("Supabase paper trading client initialized")
+        Args:
+            name: Strategy name (e.g., 'funding_arbitrage')
+            expiry_hours: Hours until recommendations expire
+        """
+        self.name = name
+        self.expiry_hours = expiry_hours
+        self.supabase = self._init_supabase()
 
-    def save_recommendation(self, rec: Recommendation) -> Optional[str]:
-        """Save a recommendation to Supabase, returns ID"""
-        if not self.client:
-            logger.warning("Supabase not configured - recommendation not saved")
+    def _init_supabase(self) -> Optional[Client]:
+        """Initialize Supabase client"""
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_KEY")
+
+        if not url or not key:
+            logger.warning("Supabase credentials not found - database features disabled")
             return None
+
+        return create_client(url, key)
+
+    @abstractmethod
+    async def generate_recommendations(self) -> List[Recommendation]:
+        """
+        Generate trading recommendations.
+        Must be implemented by each strategy.
+
+        Returns:
+            List of Recommendation objects
+        """
+        pass
+
+    @abstractmethod
+    async def get_top_symbols(self, limit: int = 10) -> List[str]:
+        """
+        Get top symbols to analyze.
+
+        Args:
+            limit: Number of symbols to return
+
+        Returns:
+            List of symbol names
+        """
+        pass
+
+    async def run(self) -> List[Recommendation]:
+        """
+        Run the strategy and save recommendations.
+
+        Returns:
+            List of saved recommendations
+        """
+        logger.info(f"[{self.name}] Running strategy...")
 
         try:
-            data = rec.to_dict()
-            result = self.client.table("paper_recommendations").insert(data).execute()
+            recommendations = await self.generate_recommendations()
+
+            if not recommendations:
+                logger.info(f"[{self.name}] No recommendations generated")
+                return []
+
+            # Save to database
+            saved = []
+            for rec in recommendations:
+                saved_rec = await self.save_recommendation(rec)
+                if saved_rec:
+                    saved.append(saved_rec)
+
+            logger.info(f"[{self.name}] Saved {len(saved)} recommendations")
+            return saved
+
+        except Exception as e:
+            logger.error(f"[{self.name}] Strategy error: {e}")
+            raise
+
+    async def save_recommendation(self, rec: Recommendation) -> Optional[Recommendation]:
+        """Save recommendation to Supabase"""
+        if not self.supabase:
+            logger.warning("Cannot save - Supabase not configured")
+            return rec
+
+        try:
+            data = {
+                "strategy_name": rec.strategy_name,
+                "symbol": rec.symbol,
+                "direction": rec.direction,
+                "entry_price": float(rec.entry_price),
+                "target_price_1": float(rec.target_price_1),
+                "stop_loss_price": float(rec.stop_loss_price),
+                "confidence_score": rec.confidence_score,
+                "expires_at": rec.expires_at.isoformat(),
+                "position_size": float(rec.position_size),
+                "strategy_params": rec.strategy_params,
+                "status": "ACTIVE",
+            }
+
+            result = self.supabase.table("paper_recommendations").insert(data).execute()
 
             if result.data:
-                rec_id = result.data[0]["id"]
-                logger.info(f"Saved recommendation {rec_id}: {rec.symbol} {rec.direction.value}")
-                return rec_id
-            return None
+                rec.id = result.data[0]["id"]
+                rec.created_at = datetime.fromisoformat(
+                    result.data[0]["created_at"].replace("Z", "+00:00")
+                )
+                logger.debug(f"Saved recommendation {rec.id} for {rec.symbol}")
+                return rec
+
         except Exception as e:
             logger.error(f"Error saving recommendation: {e}")
-            return None
 
-    def get_active_recommendations(self, strategy_name: Optional[str] = None) -> List[Recommendation]:
-        """Get all active recommendations, optionally filtered by strategy"""
-        if not self.client:
+        return None
+
+    async def get_active_recommendations(self) -> List[Dict[str, Any]]:
+        """Get all active recommendations for this strategy"""
+        if not self.supabase:
             return []
 
         try:
-            query = self.client.table("paper_recommendations").select("*").eq("status", "ACTIVE")
+            result = self.supabase.table("paper_recommendations").select("*").eq(
+                "strategy_name", self.name
+            ).eq("status", "ACTIVE").execute()
 
-            if strategy_name:
-                query = query.eq("strategy_name", strategy_name)
+            return result.data or []
 
-            result = query.order("created_at", desc=True).execute()
-
-            return [Recommendation.from_dict(row) for row in result.data]
         except Exception as e:
             logger.error(f"Error fetching active recommendations: {e}")
             return []
 
-    def get_recommendations_since(self, since: datetime, strategy_name: Optional[str] = None) -> List[Recommendation]:
-        """Get recommendations since a given time"""
-        if not self.client:
+    async def check_outcomes(self, current_prices: Dict[str, float]) -> List[Dict[str, Any]]:
+        """
+        Check if any active recommendations have hit target or stop.
+
+        Args:
+            current_prices: Dict of symbol -> current price
+
+        Returns:
+            List of outcome records
+        """
+        if not self.supabase:
             return []
 
-        try:
-            query = self.client.table("paper_recommendations").select("*").gte("created_at", since.isoformat())
+        outcomes = []
+        active = await self.get_active_recommendations()
+        now = datetime.now(timezone.utc)
 
-            if strategy_name:
-                query = query.eq("strategy_name", strategy_name)
+        for rec in active:
+            symbol = rec["symbol"]
+            if symbol not in current_prices:
+                continue
 
-            result = query.order("created_at", desc=True).execute()
+            current_price = current_prices[symbol]
+            entry_price = float(rec["entry_price"])
+            target_price = float(rec["target_price_1"])
+            stop_price = float(rec["stop_loss_price"])
+            direction = rec["direction"]
+            position_size = float(rec.get("position_size", 1000))
 
-            return [Recommendation.from_dict(row) for row in result.data]
-        except Exception as e:
-            logger.error(f"Error fetching recommendations: {e}")
-            return []
+            # Parse expiry
+            expires_at = rec["expires_at"]
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
 
-    def update_recommendation_status(self, rec_id: str, status: RecommendationStatus) -> bool:
-        """Update recommendation status"""
-        if not self.client:
-            return False
+            # Parse created_at
+            created_at = rec["created_at"]
+            if isinstance(created_at, str):
+                created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
 
-        try:
-            self.client.table("paper_recommendations").update(
-                {"status": status.value}
-            ).eq("id", rec_id).execute()
+            outcome_type = None
+            exit_price = current_price
 
-            logger.info(f"Updated recommendation {rec_id} to {status.value}")
-            return True
-        except Exception as e:
-            logger.error(f"Error updating recommendation status: {e}")
-            return False
+            # Check for target/stop hit based on direction
+            if direction == "LONG":
+                if current_price >= target_price:
+                    outcome_type = "TARGET_HIT"
+                elif current_price <= stop_price:
+                    outcome_type = "STOPPED"
+            elif direction == "SHORT":
+                if current_price <= target_price:
+                    outcome_type = "TARGET_HIT"
+                elif current_price >= stop_price:
+                    outcome_type = "STOPPED"
 
-    def save_outcome(
+            # Check for expiry
+            if not outcome_type and now >= expires_at:
+                outcome_type = "EXPIRED"
+
+            if outcome_type:
+                # Calculate PnL
+                if direction == "LONG":
+                    pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                else:
+                    pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+
+                pnl_amount = (pnl_pct / 100) * position_size
+                hold_duration = int((now - created_at).total_seconds() / 60)
+
+                outcome = await self._save_outcome(
+                    rec["id"], outcome_type, exit_price, pnl_pct, pnl_amount, hold_duration
+                )
+
+                if outcome:
+                    # Add recommendation data for Telegram formatting
+                    outcome["recommendation"] = rec
+                    outcomes.append(outcome)
+
+        return outcomes
+
+    async def _save_outcome(
         self,
         recommendation_id: str,
         outcome_type: str,
         exit_price: float,
         pnl_pct: float,
-        hold_duration_minutes: int,
-        pnl_usd: Optional[float] = None,
-        peak_pnl_pct: Optional[float] = None,
-        trough_pnl_pct: Optional[float] = None,
-        notes: Optional[str] = None
-    ) -> bool:
-        """Save outcome for a recommendation"""
-        if not self.client:
-            return False
+        pnl_amount: float,
+        hold_duration_minutes: int
+    ) -> Optional[Dict[str, Any]]:
+        """Save outcome and update recommendation status"""
+        if not self.supabase:
+            return None
 
         try:
-            data = {
+            # Save outcome
+            outcome_data = {
                 "recommendation_id": recommendation_id,
                 "outcome_type": outcome_type,
-                "exit_price": exit_price,
-                "pnl_pct": pnl_pct,
+                "exit_price": float(exit_price),
+                "pnl_pct": float(pnl_pct),
+                "pnl_usd": float(pnl_amount),
                 "hold_duration_minutes": hold_duration_minutes,
             }
 
-            if pnl_usd is not None:
-                data["pnl_usd"] = pnl_usd
-            if peak_pnl_pct is not None:
-                data["peak_pnl_pct"] = peak_pnl_pct
-            if trough_pnl_pct is not None:
-                data["trough_pnl_pct"] = trough_pnl_pct
-            if notes:
-                data["notes"] = notes
+            result = self.supabase.table("paper_recommendation_outcomes").insert(
+                outcome_data
+            ).execute()
 
-            self.client.table("paper_recommendation_outcomes").insert(data).execute()
+            # Update recommendation status
+            self.supabase.table("paper_recommendations").update({
+                "status": outcome_type
+            }).eq("id", recommendation_id).execute()
 
-            logger.info(f"Saved outcome for {recommendation_id}: {outcome_type} {pnl_pct:+.2f}%")
-            return True
+            logger.info(
+                f"Outcome saved: {recommendation_id} -> {outcome_type} "
+                f"({pnl_pct:+.2f}%)"
+            )
+
+            return result.data[0] if result.data else outcome_data
+
         except Exception as e:
             logger.error(f"Error saving outcome: {e}")
-            return False
-
-    def save_price_snapshot(self, recommendation_id: str, price: float, unrealized_pnl_pct: float) -> bool:
-        """Save price snapshot for tracking"""
-        if not self.client:
-            return False
-
-        try:
-            self.client.table("paper_price_snapshots").insert({
-                "recommendation_id": recommendation_id,
-                "price": price,
-                "unrealized_pnl_pct": unrealized_pnl_pct
-            }).execute()
-            return True
-        except Exception as e:
-            logger.error(f"Error saving price snapshot: {e}")
-            return False
-
-    def get_outcomes_since(self, since: datetime, strategy_name: Optional[str] = None) -> List[Dict]:
-        """Get outcomes since a given time"""
-        if not self.client:
-            return []
-
-        try:
-            query = self.client.table("paper_recommendation_outcomes").select(
-                "*, paper_recommendations!inner(strategy_name, symbol, direction, entry_price, confidence_score)"
-            ).gte("outcome_time", since.isoformat())
-
-            if strategy_name:
-                query = query.eq("paper_recommendations.strategy_name", strategy_name)
-
-            result = query.order("outcome_time", desc=True).execute()
-            return result.data
-        except Exception as e:
-            logger.error(f"Error fetching outcomes: {e}")
-            return []
-
-    def upsert_metrics(self, metrics: Dict[str, Any]) -> bool:
-        """Upsert strategy metrics"""
-        if not self.client:
-            return False
-
-        try:
-            self.client.table("paper_strategy_metrics").upsert(
-                metrics,
-                on_conflict="strategy_name,period"
-            ).execute()
-            return True
-        except Exception as e:
-            logger.error(f"Error upserting metrics: {e}")
-            return False
-
-    def get_metrics(self, strategy_name: Optional[str] = None, period: Optional[str] = None) -> List[Dict]:
-        """Get strategy metrics"""
-        if not self.client:
-            return []
-
-        try:
-            query = self.client.table("paper_strategy_metrics").select("*")
-
-            if strategy_name:
-                query = query.eq("strategy_name", strategy_name)
-            if period:
-                query = query.eq("period", period)
-
-            result = query.order("updated_at", desc=True).execute()
-            return result.data
-        except Exception as e:
-            logger.error(f"Error fetching metrics: {e}")
-            return []
-
-
-class BaseStrategy(ABC):
-    """Base class for paper trading strategies"""
-
-    def __init__(
-        self,
-        name: str,
-        default_expiry_hours: int = 24,
-        min_confidence: int = 50,
-        position_size_usd: float = 1000.0
-    ):
-        self.name = name
-        self.default_expiry_hours = default_expiry_hours
-        self.min_confidence = min_confidence
-        self.position_size_usd = position_size_usd
-        self.db = SupabasePaperTrading()
-
-        logger.info(f"Strategy initialized: {name}")
-
-    @abstractmethod
-    async def generate_signals(self) -> List[Recommendation]:
-        """
-        Generate trading signals.
-
-        Returns:
-            List of Recommendation objects for symbols that meet criteria.
-            Should return empty list if no opportunities found.
-        """
-        pass
-
-    @abstractmethod
-    async def get_current_prices(self, symbols: List[str]) -> Dict[str, float]:
-        """
-        Get current prices for symbols.
-
-        Args:
-            symbols: List of symbols to get prices for
-
-        Returns:
-            Dict mapping symbol to current price
-        """
-        pass
-
-    def save_recommendation(self, rec: Recommendation) -> Optional[str]:
-        """Save recommendation to database"""
-        return self.db.save_recommendation(rec)
-
-    def get_active_recommendations(self) -> List[Recommendation]:
-        """Get active recommendations for this strategy"""
-        return self.db.get_active_recommendations(self.name)
-
-    async def check_outcomes(self) -> List[Dict]:
-        """
-        Check active recommendations for outcomes (target hit, stopped, expired).
-
-        Returns:
-            List of outcome dictionaries
-        """
-        active_recs = self.get_active_recommendations()
-
-        if not active_recs:
-            return []
-
-        # Get current prices
-        symbols = list(set(r.symbol for r in active_recs))
-        prices = await self.get_current_prices(symbols)
-
-        outcomes = []
-        now = datetime.now(timezone.utc)
-
-        for rec in active_recs:
-            if not rec.id:
-                continue
-
-            current_price = prices.get(rec.symbol)
-            if not current_price:
-                continue
-
-            pnl_pct = rec.calculate_pnl_pct(current_price)
-            created_at = rec.created_at or now
-            duration_minutes = int((now - created_at).total_seconds() / 60)
-
-            outcome_type = None
-
-            # Check expiry first
-            if rec.expires_at and now >= rec.expires_at:
-                outcome_type = "EXPIRED"
-
-            # Check stop loss
-            elif rec.stop_loss_price:
-                if rec.direction == Direction.LONG and current_price <= rec.stop_loss_price:
-                    outcome_type = "STOPPED"
-                elif rec.direction == Direction.SHORT and current_price >= rec.stop_loss_price:
-                    outcome_type = "STOPPED"
-
-            # Check target
-            if not outcome_type and rec.target_price_1:
-                if rec.direction == Direction.LONG and current_price >= rec.target_price_1:
-                    outcome_type = "TARGET_HIT"
-                elif rec.direction == Direction.SHORT and current_price <= rec.target_price_1:
-                    outcome_type = "TARGET_HIT"
-
-            if outcome_type:
-                # Update status
-                self.db.update_recommendation_status(rec.id, RecommendationStatus(outcome_type))
-
-                # Save outcome
-                pnl_usd = (pnl_pct / 100) * self.position_size_usd
-                self.db.save_outcome(
-                    recommendation_id=rec.id,
-                    outcome_type=outcome_type,
-                    exit_price=current_price,
-                    pnl_pct=pnl_pct,
-                    hold_duration_minutes=duration_minutes,
-                    pnl_usd=pnl_usd
-                )
-
-                outcomes.append({
-                    "recommendation": rec,
-                    "outcome_type": outcome_type,
-                    "exit_price": current_price,
-                    "pnl_pct": pnl_pct,
-                    "pnl_usd": pnl_usd,
-                    "duration_minutes": duration_minutes
-                })
-
-                logger.info(f"Outcome recorded: {rec.symbol} {outcome_type} {pnl_pct:+.2f}%")
-            else:
-                # Save price snapshot for tracking
-                self.db.save_price_snapshot(rec.id, current_price, pnl_pct)
-
-        return outcomes
-
-    def create_recommendation(
-        self,
-        symbol: str,
-        direction: Direction,
-        entry_price: float,
-        confidence_score: int,
-        target_price_1: Optional[float] = None,
-        stop_loss_price: Optional[float] = None,
-        strategy_params: Optional[Dict] = None,
-        notes: Optional[str] = None,
-        expiry_hours: Optional[int] = None
-    ) -> Recommendation:
-        """Helper to create a recommendation with defaults"""
-
-        expiry_hours = expiry_hours or self.default_expiry_hours
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=expiry_hours)
-
-        return Recommendation(
-            strategy_name=self.name,
-            symbol=symbol,
-            direction=direction,
-            entry_price=entry_price,
-            confidence_score=confidence_score,
-            target_price_1=target_price_1,
-            stop_loss_price=stop_loss_price,
-            expires_at=expires_at,
-            strategy_params=strategy_params or {},
-            notes=notes
-        )
+            return None

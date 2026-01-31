@@ -4,21 +4,13 @@ Generate a comprehensive review of paper trading performance.
 
 ## What to do
 
-1. Run the paper trading review script:
-   ```bash
-   python -m scripts.paper_trading.scheduler --review 24h
-   ```
+Run the scheduler with --review flag:
 
-   Or programmatically:
-   ```python
-   import asyncio
-   from scripts.paper_trading.scheduler import PaperTradingScheduler
+```bash
+python -m scripts.paper_trading.scheduler --review
+```
 
-   scheduler = PaperTradingScheduler()
-   asyncio.run(scheduler.run_review("$ARGUMENTS"))
-   ```
-
-2. The review will:
+The review will:
    - Calculate metrics for all strategies over the specified period
    - Generate a formatted report
    - Optionally send summary to Telegram

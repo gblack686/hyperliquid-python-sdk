@@ -1,107 +1,115 @@
 """
 Directional Momentum Strategy
 =============================
-Generates signals based on momentum indicators.
-
-Logic:
-- RSI extremes with EMA alignment
+Identifies high-momentum opportunities using:
+- RSI
+- EMA crossovers
 - Volume confirmation
-- Multi-indicator confluence
-
-This is a trend-following strategy that catches momentum moves.
+- 24h price change
 """
 
 import os
+import logging
 import time
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-import asyncio
 import numpy as np
-
-from loguru import logger
-from dotenv import load_dotenv
+from datetime import datetime, timedelta, timezone
+from typing import List, Dict, Any, Optional
 
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
-
-from ..base_strategy import BaseStrategy, Recommendation, Direction
+from dotenv import load_dotenv
 
 load_dotenv()
 
+from ..base_strategy import BaseStrategy, Recommendation
+
+logger = logging.getLogger(__name__)
+
+# Try to import quantpylib for candle data
+try:
+    from quantpylib.wrappers.hyperliquid import Hyperliquid
+    HAS_QUANTPYLIB = True
+except ImportError:
+    HAS_QUANTPYLIB = False
+    logger.warning("quantpylib not available - using basic momentum detection")
+
 
 class DirectionalStrategy(BaseStrategy):
-    """Directional momentum strategy - trend following"""
+    """Directional momentum strategy"""
 
     def __init__(
         self,
-        min_score: int = 60,  # Minimum momentum score
-        min_volume_24h: float = 500000,
-        min_change_24h: float = 2.0,  # Minimum 24h change %
-        max_signals_per_run: int = 3,
-        risk_reward_ratio: float = 1.5,
-        position_size_usd: float = 1000.0
+        min_change_pct: float = 3.0,     # Minimum 3% 24h change
+        min_volume: float = 500_000,     # Minimum $500K 24h volume
+        min_score: int = 50,             # Minimum momentum score (0-100)
+        expiry_hours: int = 24,          # 24 hour expiry
+        position_size: float = 1000.0,   # Paper position size
     ):
         """
         Initialize directional strategy.
 
         Args:
-            min_score: Minimum momentum score (0-100) to generate signal
-            min_volume_24h: Minimum 24h volume in USD
-            min_change_24h: Minimum 24h price change % to consider
-            max_signals_per_run: Maximum signals to generate per run
-            risk_reward_ratio: Target R:R ratio for entries
-            position_size_usd: Default position size
+            min_change_pct: Minimum 24h price change to consider
+            min_volume: Minimum 24h volume in USD
+            min_score: Minimum momentum score to generate signal
+            expiry_hours: Hours until recommendation expires
+            position_size: Paper position size in USD
         """
-        super().__init__(
-            name="directional_momentum",
-            default_expiry_hours=24,
-            min_confidence=60,
-            position_size_usd=position_size_usd
-        )
+        super().__init__(name="directional_momentum", expiry_hours=expiry_hours)
 
+        self.min_change_pct = min_change_pct
+        self.min_volume = min_volume
         self.min_score = min_score
-        self.min_volume_24h = min_volume_24h
-        self.min_change_24h = min_change_24h
-        self.max_signals_per_run = max_signals_per_run
-        self.risk_reward_ratio = risk_reward_ratio
+        self.position_size = position_size
 
-        self.info = Info(constants.MAINNET_API_URL, skip_ws=True)
+        self._hyp = None
 
-    def _get_candles(self, symbol: str, interval: str, start_time: int, end_time: int) -> List[Dict]:
-        """
-        Get candle data using the built-in Hyperliquid SDK.
+    async def _get_hyp_client(self):
+        """Get or create Hyperliquid client for candle data"""
+        if not HAS_QUANTPYLIB:
+            return None
 
-        Args:
-            symbol: Trading pair symbol (e.g., "BTC")
-            interval: Candle interval (e.g., "1h", "15m")
-            start_time: Start time in milliseconds
-            end_time: End time in milliseconds
+        if self._hyp is None:
+            try:
+                self._hyp = Hyperliquid(
+                    key=os.getenv("HYP_KEY"),
+                    secret=os.getenv("HYP_SECRET"),
+                    mode="live"
+                )
+                await self._hyp.init_client()
+            except Exception as e:
+                logger.warning(f"Could not initialize Hyperliquid client: {e}")
+                return None
 
-        Returns:
-            List of candle dictionaries with o, h, l, c, v keys
-        """
+        return self._hyp
+
+    async def get_top_symbols(self, limit: int = 10) -> List[str]:
+        """Get top symbols by 24h volume"""
+        info = Info(constants.MAINNET_API_URL, skip_ws=True)
+
         try:
-            raw_candles = self.info.candles_snapshot(symbol, interval, start_time, end_time)
-
-            if not raw_candles:
+            meta_and_ctxs = info.meta_and_asset_ctxs()
+            if not meta_and_ctxs or len(meta_and_ctxs) < 2:
                 return []
 
-            # Convert SDK format to our expected format
-            candles = []
-            for c in raw_candles:
-                candles.append({
-                    "t": c.get("t", 0),  # timestamp
-                    "o": c.get("o", 0),  # open
-                    "h": c.get("h", 0),  # high
-                    "l": c.get("l", 0),  # low
-                    "c": c.get("c", 0),  # close
-                    "v": c.get("v", 0),  # volume
-                })
+            meta = meta_and_ctxs[0]
+            asset_ctxs = meta_and_ctxs[1]
+            universe = meta.get("universe", [])
 
-            return candles
+            symbols = []
+            for i, asset in enumerate(universe):
+                ticker = asset.get("name", f"UNKNOWN_{i}")
+                ctx = asset_ctxs[i] if i < len(asset_ctxs) else {}
+                volume = float(ctx.get("dayNtlVlm", 0))
+
+                if volume >= self.min_volume:
+                    symbols.append((ticker, volume))
+
+            symbols.sort(key=lambda x: x[1], reverse=True)
+            return [s[0] for s in symbols[:limit]]
 
         except Exception as e:
-            logger.debug(f"Error fetching candles for {symbol}: {e}")
+            logger.error(f"Error getting top symbols: {e}")
             return []
 
     def _calculate_rsi(self, closes: np.ndarray, period: int = 14) -> Optional[float]:
@@ -139,312 +147,270 @@ class DirectionalStrategy(BaseStrategy):
 
         return ema
 
-    def _calculate_atr(self, candles: List[Dict], period: int = 14) -> Optional[float]:
-        """Calculate Average True Range"""
-        if len(candles) < period + 1:
+    async def _get_technical_data(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """Get technical indicator data for a symbol"""
+        hyp = await self._get_hyp_client()
+
+        if not hyp:
+            # Return None - will use basic momentum detection
             return None
 
-        trs = []
-        for i in range(1, len(candles)):
-            high = float(candles[i]["h"])
-            low = float(candles[i]["l"])
-            prev_close = float(candles[i-1]["c"])
+        try:
+            now = int(time.time() * 1000)
+            start = now - (100 * 60 * 60 * 1000)  # 100 hours of 1h candles
 
-            tr = max(
-                high - low,
-                abs(high - prev_close),
-                abs(low - prev_close)
+            candles = await hyp.candle_historical(
+                ticker=ticker,
+                interval="1h",
+                start=start,
+                end=now
             )
-            trs.append(tr)
 
-        if len(trs) < period:
+            if not candles or len(candles) < 20:
+                return None
+
+            closes = np.array([float(c["c"]) for c in candles])
+            volumes = np.array([float(c["v"]) for c in candles])
+
+            current_price = closes[-1]
+            rsi = self._calculate_rsi(closes)
+            ema20 = self._calculate_ema(closes, 20)
+            ema50 = self._calculate_ema(closes, 50) if len(closes) >= 50 else ema20
+
+            avg_volume = np.mean(volumes[-20:]) if len(volumes) >= 20 else np.mean(volumes)
+            current_volume = volumes[-1]
+            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1
+
+            return {
+                "current_price": current_price,
+                "rsi": rsi,
+                "ema20": ema20,
+                "ema50": ema50,
+                "volume_ratio": volume_ratio,
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting technical data for {ticker}: {e}")
             return None
-
-        return np.mean(trs[-period:])
 
     def _calculate_momentum_score(
         self,
-        is_long: bool,
         change_24h: float,
+        is_long: bool,
         rsi: Optional[float],
-        ema20: float,
-        ema50: float,
         current_price: float,
-        volume_ratio: float
+        ema20: Optional[float],
+        ema50: Optional[float],
+        volume_ratio: Optional[float]
     ) -> int:
         """
         Calculate momentum score (0-100).
 
         Components:
-        - Price change: 30 points
-        - RSI alignment: 25 points
-        - EMA alignment: 25 points
-        - Volume confirmation: 20 points
+        - Price change (30 points)
+        - Volume (20 points)
+        - EMA alignment (25 points)
+        - RSI (25 points)
         """
         score = 0
 
         # Price change component (30 points)
-        change_score = min(abs(change_24h) * 5, 30)
+        change_score = min(abs(change_24h) * 3, 30)
         score += change_score
 
         # Volume component (20 points)
-        if volume_ratio > 2.0:
-            score += 20
-        elif volume_ratio > 1.5:
-            score += 15
-        elif volume_ratio > 1.0:
-            score += 10
+        if volume_ratio:
+            if volume_ratio > 2:
+                score += 20
+            elif volume_ratio > 1.5:
+                score += 15
+            elif volume_ratio > 1:
+                score += 10
 
         # EMA alignment (25 points)
-        if is_long:
-            if current_price > ema20 and ema20 > ema50:
-                score += 25  # Strong bullish alignment
-            elif current_price > ema20:
-                score += 15
-            elif current_price > ema50:
-                score += 10
-        else:
-            if current_price < ema20 and ema20 < ema50:
-                score += 25  # Strong bearish alignment
-            elif current_price < ema20:
-                score += 15
-            elif current_price < ema50:
-                score += 10
+        if ema20 and ema50:
+            if is_long:
+                if current_price > ema20 and current_price > ema50:
+                    score += 25
+                elif current_price > ema20:
+                    score += 15
+            else:
+                if current_price < ema20 and current_price < ema50:
+                    score += 25
+                elif current_price < ema20:
+                    score += 15
 
         # RSI component (25 points)
         if rsi:
             if is_long:
-                # For longs: want RSI 40-70 (room to run, not overbought)
-                if 40 <= rsi <= 65:
+                if 40 <= rsi <= 70:  # Not overbought, room to run
                     score += 25
                 elif 30 <= rsi < 40:  # Recovering
                     score += 20
-                elif 65 < rsi <= 75:  # Getting hot but still ok
-                    score += 15
+                elif rsi > 70:  # Overbought - reduce score
+                    score += 5
             else:
-                # For shorts: want RSI 30-60 (room to fall, not oversold)
-                if 35 <= rsi <= 60:
+                if 30 <= rsi <= 60:  # Not oversold, room to fall
                     score += 25
-                elif 60 < rsi <= 70:  # Weakening
+                elif 60 < rsi <= 70:  # Starting to weaken
                     score += 20
-                elif 25 <= rsi < 35:
-                    score += 15
+                elif rsi < 30:  # Oversold - reduce score
+                    score += 5
 
-        return min(score, 100)
+        return min(100, int(score))
 
-    async def generate_signals(self) -> List[Recommendation]:
-        """
-        Generate signals based on momentum indicators.
+    def _get_ema_status(
+        self,
+        current_price: float,
+        ema20: Optional[float],
+        ema50: Optional[float]
+    ) -> str:
+        """Get human-readable EMA status"""
+        if not ema20 or not ema50:
+            return "N/A"
 
-        Returns:
-            List of recommendations for high momentum opportunities
-        """
-        logger.info(f"[{self.name}] Scanning for momentum opportunities...")
+        if current_price > ema20 > ema50:
+            return "Price > EMA20 > EMA50"
+        elif current_price > ema20:
+            return "Price > EMA20"
+        elif current_price < ema20 < ema50:
+            return "Price < EMA20 < EMA50"
+        elif current_price < ema20:
+            return "Price < EMA20"
+        else:
+            return "Mixed"
+
+    async def generate_recommendations(self) -> List[Recommendation]:
+        """Generate directional momentum recommendations"""
+        info = Info(constants.MAINNET_API_URL, skip_ws=True)
+        recommendations = []
 
         try:
-
-            # Get market data
-            meta_and_ctxs = self.info.meta_and_asset_ctxs()
+            logger.info("[MOMENTUM] Fetching market data...")
+            meta_and_ctxs = info.meta_and_asset_ctxs()
 
             if not meta_and_ctxs or len(meta_and_ctxs) < 2:
-                logger.error("Could not fetch market data")
+                logger.error("[MOMENTUM] Could not fetch market data")
                 return []
 
             meta = meta_and_ctxs[0]
             asset_ctxs = meta_and_ctxs[1]
             universe = meta.get("universe", [])
 
-            # Filter and sort candidates
-            candidates = []
+            logger.info(f"[MOMENTUM] Analyzing {len(universe)} markets...")
+
+            # Extract market data with 24h changes
+            market_data = []
             for i, asset in enumerate(universe):
-                ticker = asset.get("name", "")
+                ticker = asset.get("name", f"UNKNOWN_{i}")
                 ctx = asset_ctxs[i] if i < len(asset_ctxs) else {}
 
                 mark_price = float(ctx.get("markPx", 0))
                 prev_price = float(ctx.get("prevDayPx", 0))
                 volume_24h = float(ctx.get("dayNtlVlm", 0))
+                open_interest = float(ctx.get("openInterest", 0))
 
-                if mark_price > 0 and prev_price > 0 and volume_24h >= self.min_volume_24h:
+                if mark_price > 0 and prev_price > 0 and volume_24h >= self.min_volume:
                     change_24h = ((mark_price - prev_price) / prev_price) * 100
 
-                    if abs(change_24h) >= self.min_change_24h:
-                        candidates.append({
+                    # Only consider markets with significant movement
+                    if abs(change_24h) >= self.min_change_pct:
+                        market_data.append({
                             "ticker": ticker,
-                            "mark_price": mark_price,
+                            "price": mark_price,
                             "change_24h": change_24h,
                             "volume_24h": volume_24h,
-                            "is_long": change_24h > 0
+                            "open_interest": open_interest * mark_price,
                         })
 
             # Sort by absolute change
-            candidates.sort(key=lambda x: abs(x["change_24h"]), reverse=True)
-            candidates = candidates[:15]  # Top 15 movers
+            market_data.sort(key=lambda x: abs(x["change_24h"]), reverse=True)
 
-            logger.info(f"[{self.name}] Analyzing {len(candidates)} momentum candidates")
+            logger.info(f"[MOMENTUM] Found {len(market_data)} candidates with >{self.min_change_pct}% change")
 
-            # Get active recommendations
-            active_recs = self.get_active_recommendations()
-            active_symbols = {r.symbol for r in active_recs}
+            now = datetime.now(timezone.utc)
+            expires_at = now + timedelta(hours=self.expiry_hours)
 
-            recommendations = []
-            now = int(time.time() * 1000)
-            start = now - (100 * 60 * 60 * 1000)  # 100 hours for EMA calculation
+            # Analyze top movers
+            for market in market_data[:10]:
+                ticker = market["ticker"]
+                is_long = market["change_24h"] > 0
 
-            for candidate in candidates:
-                ticker = candidate["ticker"]
+                # Get technical data
+                tech_data = await self._get_technical_data(ticker)
 
-                if ticker in active_symbols:
+                rsi = tech_data["rsi"] if tech_data else None
+                ema20 = tech_data["ema20"] if tech_data else None
+                ema50 = tech_data["ema50"] if tech_data else None
+                volume_ratio = tech_data["volume_ratio"] if tech_data else None
+                current_price = tech_data["current_price"] if tech_data else market["price"]
+
+                # Calculate momentum score
+                score = self._calculate_momentum_score(
+                    market["change_24h"],
+                    is_long,
+                    rsi,
+                    current_price,
+                    ema20,
+                    ema50,
+                    volume_ratio
+                )
+
+                if score < self.min_score:
                     continue
 
-                if len(recommendations) >= self.max_signals_per_run:
-                    break
+                direction = "LONG" if is_long else "SHORT"
 
-                try:
-                    # Fetch candle data using built-in SDK
-                    candles = self._get_candles(ticker, "1h", start, now)
+                # Calculate targets and stops
+                if is_long:
+                    # For longs: target above, stop below
+                    target = current_price * 1.02  # 2% target
+                    stop = current_price * 0.982   # 1.8% stop
+                else:
+                    # For shorts: target below, stop above
+                    target = current_price * 0.98   # 2% target
+                    stop = current_price * 1.018    # 1.8% stop
 
-                    if not candles or len(candles) < 50:
-                        continue
+                ema_status = self._get_ema_status(current_price, ema20, ema50)
 
-                    closes = np.array([float(c["c"]) for c in candles])
-                    volumes = np.array([float(c["v"]) for c in candles])
+                rec = Recommendation(
+                    strategy_name=self.name,
+                    symbol=ticker,
+                    direction=direction,
+                    entry_price=current_price,
+                    target_price_1=target,
+                    stop_loss_price=stop,
+                    confidence_score=score,
+                    expires_at=expires_at,
+                    position_size=self.position_size,
+                    strategy_params={
+                        "change_24h": round(market["change_24h"], 2),
+                        "score": score,
+                        "rsi": round(rsi, 1) if rsi else None,
+                        "ema_status": ema_status,
+                        "volume_ratio": round(volume_ratio, 2) if volume_ratio else None,
+                        "volume_24h": market["volume_24h"],
+                    },
+                )
+                recommendations.append(rec)
+                rsi_str = f"{rsi:.1f}" if rsi else "N/A"
+                logger.info(
+                    f"[MOMENTUM] {direction} {ticker}: "
+                    f"change={market['change_24h']:+.1f}%, score={score}, rsi={rsi_str}"
+                )
 
-                    # Calculate indicators
-                    rsi = self._calculate_rsi(closes, 14)
-                    ema20 = self._calculate_ema(closes, 20)
-                    ema50 = self._calculate_ema(closes, 50)
-                    atr = self._calculate_atr(candles, 14)
-
-                    current_price = closes[-1]
-                    avg_volume = np.mean(volumes[-20:])
-                    recent_volume = np.mean(volumes[-3:])
-                    volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1
-
-                    # Calculate momentum score
-                    is_long = candidate["is_long"]
-                    score = self._calculate_momentum_score(
-                        is_long=is_long,
-                        change_24h=candidate["change_24h"],
-                        rsi=rsi,
-                        ema20=ema20,
-                        ema50=ema50,
-                        current_price=current_price,
-                        volume_ratio=volume_ratio
-                    )
-
-                    if score < self.min_score:
-                        continue
-
-                    # Calculate entry, target, stop
-                    direction = Direction.LONG if is_long else Direction.SHORT
-
-                    if atr:
-                        # ATR-based stops
-                        if is_long:
-                            stop_loss = current_price - (atr * 2)
-                            risk = current_price - stop_loss
-                            target = current_price + (risk * self.risk_reward_ratio)
-                        else:
-                            stop_loss = current_price + (atr * 2)
-                            risk = stop_loss - current_price
-                            target = current_price - (risk * self.risk_reward_ratio)
-                    else:
-                        # Percentage-based fallback
-                        stop_pct = 0.02  # 2%
-                        if is_long:
-                            stop_loss = current_price * (1 - stop_pct)
-                            target = current_price * (1 + stop_pct * self.risk_reward_ratio)
-                        else:
-                            stop_loss = current_price * (1 + stop_pct)
-                            target = current_price * (1 - stop_pct * self.risk_reward_ratio)
-
-                    # Confidence is based on score
-                    confidence = max(55, min(score, 95))
-
-                    rec = self.create_recommendation(
-                        symbol=ticker,
-                        direction=direction,
-                        entry_price=current_price,
-                        confidence_score=confidence,
-                        target_price_1=target,
-                        stop_loss_price=stop_loss,
-                        strategy_params={
-                            "change_24h": candidate["change_24h"],
-                            "momentum_score": score,
-                            "rsi": rsi,
-                            "ema20": ema20,
-                            "ema50": ema50,
-                            "atr": atr,
-                            "volume_ratio": volume_ratio,
-                            "volume_24h": candidate["volume_24h"]
-                        },
-                        notes=f"Score: {score}/100, 24h: {candidate['change_24h']:+.1f}%, RSI: {rsi:.0f}" if rsi else f"Score: {score}/100, 24h: {candidate['change_24h']:+.1f}%"
-                    )
-
-                    recommendations.append(rec)
-                    active_symbols.add(ticker)
-
-                except Exception as e:
-                    logger.debug(f"Error analyzing {ticker}: {e}")
-                    continue
-
-            logger.info(f"[{self.name}] Generated {len(recommendations)} signals")
+            logger.info(f"[MOMENTUM] Generated {len(recommendations)} recommendations")
             return recommendations
 
         except Exception as e:
-            logger.error(f"[{self.name}] Error generating signals: {e}")
-            return []
+            logger.error(f"[MOMENTUM] Error generating recommendations: {e}")
+            raise
 
-    async def get_current_prices(self, symbols: List[str]) -> Dict[str, float]:
-        """Get current prices for symbols"""
-        prices = {}
-
-        try:
-            meta_and_ctxs = self.info.meta_and_asset_ctxs()
-
-            if meta_and_ctxs and len(meta_and_ctxs) >= 2:
-                meta = meta_and_ctxs[0]
-                asset_ctxs = meta_and_ctxs[1]
-                universe = meta.get("universe", [])
-
-                for i, asset in enumerate(universe):
-                    ticker = asset.get("name", "")
-                    if ticker in symbols:
-                        ctx = asset_ctxs[i] if i < len(asset_ctxs) else {}
-                        price = float(ctx.get("markPx", 0))
-                        if price > 0:
-                            prices[ticker] = price
-
-        except Exception as e:
-            logger.error(f"Error fetching prices: {e}")
-
-        return prices
-
-
-async def test_directional_strategy():
-    """Test the directional strategy"""
-    strategy = DirectionalStrategy(
-        min_score=50,  # Lower for testing
-        min_change_24h=1.0,
-        max_signals_per_run=5
-    )
-
-    print("Testing Directional Strategy...")
-    print("=" * 60)
-
-    signals = await strategy.generate_signals()
-
-    print(f"\nGenerated {len(signals)} signals:\n")
-
-    for signal in signals:
-        print(f"  {signal.symbol} {signal.direction.value}")
-        print(f"    Entry: ${signal.entry_price:,.4f}")
-        print(f"    Target: ${signal.target_price_1:,.4f}" if signal.target_price_1 else "")
-        print(f"    Stop: ${signal.stop_loss_price:,.4f}" if signal.stop_loss_price else "")
-        print(f"    Confidence: {signal.confidence_score}/100")
-        print(f"    Notes: {signal.notes}")
-        print()
-
-
-if __name__ == "__main__":
-    asyncio.run(test_directional_strategy())
+        finally:
+            # Cleanup Hyperliquid client
+            if self._hyp:
+                try:
+                    await self._hyp.cleanup()
+                except Exception:
+                    pass
+                self._hyp = None
