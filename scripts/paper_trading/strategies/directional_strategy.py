@@ -24,13 +24,6 @@ from dotenv import load_dotenv
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
 
-try:
-    from quantpylib.wrappers.hyperliquid import Hyperliquid
-    HAS_QUANTPY = True
-except ImportError:
-    HAS_QUANTPY = False
-    logger.warning("quantpylib not available - directional strategy will have limited functionality")
-
 from ..base_strategy import BaseStrategy, Recommendation, Direction
 
 load_dotenv()
@@ -73,20 +66,43 @@ class DirectionalStrategy(BaseStrategy):
         self.risk_reward_ratio = risk_reward_ratio
 
         self.info = Info(constants.MAINNET_API_URL, skip_ws=True)
-        self.hyp = None
 
-        if HAS_QUANTPY:
-            self.hyp = Hyperliquid(
-                key=os.getenv("HYP_KEY"),
-                secret=os.getenv("HYP_SECRET"),
-                mode="live"
-            )
+    def _get_candles(self, symbol: str, interval: str, start_time: int, end_time: int) -> List[Dict]:
+        """
+        Get candle data using the built-in Hyperliquid SDK.
 
-    async def _init_hyp(self):
-        """Initialize Hyperliquid client if needed"""
-        if self.hyp and not hasattr(self.hyp, "_initialized"):
-            await self.hyp.init_client()
-            self.hyp._initialized = True
+        Args:
+            symbol: Trading pair symbol (e.g., "BTC")
+            interval: Candle interval (e.g., "1h", "15m")
+            start_time: Start time in milliseconds
+            end_time: End time in milliseconds
+
+        Returns:
+            List of candle dictionaries with o, h, l, c, v keys
+        """
+        try:
+            raw_candles = self.info.candles_snapshot(symbol, interval, start_time, end_time)
+
+            if not raw_candles:
+                return []
+
+            # Convert SDK format to our expected format
+            candles = []
+            for c in raw_candles:
+                candles.append({
+                    "t": c.get("t", 0),  # timestamp
+                    "o": c.get("o", 0),  # open
+                    "h": c.get("h", 0),  # high
+                    "l": c.get("l", 0),  # low
+                    "c": c.get("c", 0),  # close
+                    "v": c.get("v", 0),  # volume
+                })
+
+            return candles
+
+        except Exception as e:
+            logger.debug(f"Error fetching candles for {symbol}: {e}")
+            return []
 
     def _calculate_rsi(self, closes: np.ndarray, period: int = 14) -> Optional[float]:
         """Calculate RSI"""
@@ -225,12 +241,7 @@ class DirectionalStrategy(BaseStrategy):
         """
         logger.info(f"[{self.name}] Scanning for momentum opportunities...")
 
-        if not HAS_QUANTPY:
-            logger.warning("quantpylib required for directional strategy - skipping")
-            return []
-
         try:
-            await self._init_hyp()
 
             # Get market data
             meta_and_ctxs = self.info.meta_and_asset_ctxs()
@@ -289,13 +300,8 @@ class DirectionalStrategy(BaseStrategy):
                     break
 
                 try:
-                    # Fetch candle data
-                    candles = await self.hyp.candle_historical(
-                        ticker=ticker,
-                        interval="1h",
-                        start=start,
-                        end=now
-                    )
+                    # Fetch candle data using built-in SDK
+                    candles = self._get_candles(ticker, "1h", start, now)
 
                     if not candles or len(candles) < 50:
                         continue
