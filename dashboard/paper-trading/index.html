@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paper Trading Dashboard | Hyperliquid Strategies</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <h1>Paper Trading Dashboard</h1>
+                <span class="subtitle">Hyperliquid Strategy Performance</span>
+            </div>
+            <div class="header-right">
+                <div class="status-indicator" id="status-indicator">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Live</span>
+                </div>
+                <div class="last-updated" id="last-updated">
+                    Updated: --
+                </div>
+            </div>
+        </header>
+
+        <!-- Overview Cards -->
+        <section class="overview-section">
+            <div class="card metric-card">
+                <div class="metric-label">Total Signals (24h)</div>
+                <div class="metric-value" id="total-signals">--</div>
+                <div class="metric-sub" id="signals-breakdown">Loading...</div>
+            </div>
+            <div class="card metric-card">
+                <div class="metric-label">Win Rate</div>
+                <div class="metric-value" id="win-rate">--%</div>
+                <div class="metric-sub" id="win-loss">-- W / -- L</div>
+            </div>
+            <div class="card metric-card">
+                <div class="metric-label">Total P&L (24h)</div>
+                <div class="metric-value" id="total-pnl">$--</div>
+                <div class="metric-sub" id="pnl-pct">--%</div>
+            </div>
+            <div class="card metric-card">
+                <div class="metric-label">Active Signals</div>
+                <div class="metric-value" id="active-signals">--</div>
+                <div class="metric-sub" id="active-breakdown">Loading...</div>
+            </div>
+        </section>
+
+        <!-- Strategy Performance -->
+        <section class="strategy-section">
+            <h2>Strategy Performance (24h)</h2>
+            <div class="strategy-grid">
+                <div class="card strategy-card" id="funding-card">
+                    <div class="strategy-header">
+                        <span class="strategy-icon">$</span>
+                        <span class="strategy-name">Funding Arbitrage</span>
+                    </div>
+                    <div class="strategy-stats">
+                        <div class="stat">
+                            <span class="stat-label">Signals</span>
+                            <span class="stat-value" id="funding-signals">--</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Win Rate</span>
+                            <span class="stat-value" id="funding-winrate">--%</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">P&L</span>
+                            <span class="stat-value" id="funding-pnl">$--</span>
+                        </div>
+                    </div>
+                    <div class="strategy-bar">
+                        <div class="bar-fill" id="funding-bar" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <div class="card strategy-card" id="grid-card">
+                    <div class="strategy-header">
+                        <span class="strategy-icon">#</span>
+                        <span class="strategy-name">Grid Trading</span>
+                    </div>
+                    <div class="strategy-stats">
+                        <div class="stat">
+                            <span class="stat-label">Signals</span>
+                            <span class="stat-value" id="grid-signals">--</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Win Rate</span>
+                            <span class="stat-value" id="grid-winrate">--%</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">P&L</span>
+                            <span class="stat-value" id="grid-pnl">$--</span>
+                        </div>
+                    </div>
+                    <div class="strategy-bar">
+                        <div class="bar-fill" id="grid-bar" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <div class="card strategy-card" id="momentum-card">
+                    <div class="strategy-header">
+                        <span class="strategy-icon">^</span>
+                        <span class="strategy-name">Directional Momentum</span>
+                    </div>
+                    <div class="strategy-stats">
+                        <div class="stat">
+                            <span class="stat-label">Signals</span>
+                            <span class="stat-value" id="momentum-signals">--</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Win Rate</span>
+                            <span class="stat-value" id="momentum-winrate">--%</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">P&L</span>
+                            <span class="stat-value" id="momentum-pnl">$--</span>
+                        </div>
+                    </div>
+                    <div class="strategy-bar">
+                        <div class="bar-fill" id="momentum-bar" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Active Signals Table -->
+        <section class="signals-section">
+            <div class="section-header">
+                <h2>Active Signals</h2>
+                <span class="badge" id="active-count">0</span>
+            </div>
+            <div class="card table-card">
+                <table class="data-table" id="active-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Strategy</th>
+                            <th>Symbol</th>
+                            <th>Direction</th>
+                            <th>Entry</th>
+                            <th>Target</th>
+                            <th>Stop</th>
+                            <th>Confidence</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="active-tbody">
+                        <tr><td colspan="9" class="loading">Loading signals...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Recent Outcomes Table -->
+        <section class="outcomes-section">
+            <div class="section-header">
+                <h2>Recent Outcomes (24h)</h2>
+                <span class="badge" id="outcomes-count">0</span>
+            </div>
+            <div class="card table-card">
+                <table class="data-table" id="outcomes-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Strategy</th>
+                            <th>Symbol</th>
+                            <th>Direction</th>
+                            <th>Outcome</th>
+                            <th>P&L %</th>
+                            <th>P&L $</th>
+                            <th>Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody id="outcomes-tbody">
+                        <tr><td colspan="8" class="loading">Loading outcomes...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Paper Trading System - For educational purposes only. Not financial advice.</p>
+            <p>Data refreshes every 60 seconds. All times in UTC.</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
