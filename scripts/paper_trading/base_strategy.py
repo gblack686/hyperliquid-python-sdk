@@ -8,7 +8,7 @@ import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Optional, List, Dict, Any
 import json
@@ -462,7 +462,7 @@ class BaseStrategy(ABC):
         prices = await self.get_current_prices(symbols)
 
         outcomes = []
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         for rec in active_recs:
             if not rec.id:
@@ -542,7 +542,7 @@ class BaseStrategy(ABC):
         """Helper to create a recommendation with defaults"""
 
         expiry_hours = expiry_hours or self.default_expiry_hours
-        expires_at = datetime.utcnow() + timedelta(hours=expiry_hours)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=expiry_hours)
 
         return Recommendation(
             strategy_name=self.name,
