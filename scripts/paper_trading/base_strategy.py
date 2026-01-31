@@ -5,6 +5,7 @@ Provides base classes and utilities for paper trading strategies.
 """
 
 import os
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
@@ -17,6 +18,30 @@ from loguru import logger
 from supabase import create_client, Client
 
 load_dotenv()
+
+
+def parse_iso_datetime(dt_str: str) -> datetime:
+    """
+    Parse ISO datetime string handling various formats from Supabase.
+    Python's fromisoformat() only handles 0, 3, or 6 decimal places.
+    """
+    if not dt_str:
+        return None
+
+    # Replace Z with +00:00
+    dt_str = dt_str.replace("Z", "+00:00")
+
+    # Normalize microseconds to 6 digits
+    # Match the pattern: .XXXXX+ where X is a digit (variable length decimals)
+    match = re.search(r'\.(\d+)([+-])', dt_str)
+    if match:
+        decimals = match.group(1)
+        sign = match.group(2)
+        # Pad or truncate to 6 digits
+        normalized = decimals[:6].ljust(6, '0')
+        dt_str = dt_str[:match.start()] + '.' + normalized + sign + dt_str[match.end():]
+
+    return datetime.fromisoformat(dt_str)
 
 
 class RecommendationStatus(Enum):
@@ -85,7 +110,7 @@ class Recommendation:
         """Create from database row"""
         return cls(
             id=data.get("id"),
-            created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")) if data.get("created_at") else None,
+            created_at=parse_iso_datetime(data["created_at"]) if data.get("created_at") else None,
             strategy_name=data["strategy_name"],
             symbol=data["symbol"],
             direction=Direction(data["direction"]),
@@ -94,7 +119,7 @@ class Recommendation:
             target_price_1=float(data["target_price_1"]) if data.get("target_price_1") else None,
             target_price_2=float(data["target_price_2"]) if data.get("target_price_2") else None,
             stop_loss_price=float(data["stop_loss_price"]) if data.get("stop_loss_price") else None,
-            expires_at=datetime.fromisoformat(data["expires_at"].replace("Z", "+00:00")) if data.get("expires_at") else None,
+            expires_at=parse_iso_datetime(data["expires_at"]) if data.get("expires_at") else None,
             strategy_params=data.get("strategy_params", {}),
             notes=data.get("notes"),
             status=RecommendationStatus(data["status"]),
