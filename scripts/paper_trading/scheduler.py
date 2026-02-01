@@ -74,6 +74,14 @@ except ImportError:
 class PaperTradingScheduler:
     """Scheduler for paper trading strategies"""
 
+    # Strategies that should send Telegram alerts
+    # Set to empty list to disable all alerts, or list specific strategy names
+    ALERT_ENABLED_STRATEGIES = [
+        # "funding_arbitrage",  # Disabled - not effective
+        "grid_trading",
+        "directional_momentum",
+    ]
+
     def __init__(
         self,
         enable_telegram: bool = True,
@@ -137,12 +145,14 @@ class PaperTradingScheduler:
                 recommendations = await strategy.run()
                 all_recommendations.extend(recommendations)
 
-                # Send Telegram alerts for each recommendation
-                if self.telegram and recommendations:
+                # Send Telegram alerts for each recommendation (if strategy is enabled for alerts)
+                if self.telegram and recommendations and strategy.name in self.ALERT_ENABLED_STRATEGIES:
                     for rec in recommendations:
                         message = rec.format_telegram_signal()
                         await self.telegram.send(message, AlertPriority.MEDIUM)
                         logger.info(f"Sent Telegram alert for {rec.symbol}")
+                elif recommendations and strategy.name not in self.ALERT_ENABLED_STRATEGIES:
+                    logger.info(f"Skipping Telegram alerts for {strategy.name} (disabled)")
 
             except Exception as e:
                 logger.error(f"Error running {strategy.name}: {e}")
@@ -165,8 +175,8 @@ class PaperTradingScheduler:
                 outcomes = await strategy.check_outcomes(prices)
                 all_outcomes.extend(outcomes)
 
-                # Send Telegram alerts for outcomes
-                if self.telegram and outcomes:
+                # Send Telegram alerts for outcomes (if strategy is enabled for alerts)
+                if self.telegram and outcomes and strategy.name in self.ALERT_ENABLED_STRATEGIES:
                     for outcome in outcomes:
                         rec_data = outcome.get("recommendation", {})
 
