@@ -5,6 +5,7 @@ Provides the base class and data structures for paper trading strategies.
 """
 
 import os
+import re
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
@@ -18,6 +19,33 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+def parse_supabase_timestamp(ts: str) -> datetime:
+    """
+    Parse a timestamp from Supabase, handling variable microsecond precision.
+
+    Supabase can return timestamps like:
+    - 2026-01-31T23:03:12.86035+00:00 (5 decimal places)
+    - 2026-01-31T23:03:12.860350+00:00 (6 decimal places)
+    - 2026-01-31T23:03:12+00:00 (no decimal places)
+    - 2026-01-31T23:03:12Z (Z timezone)
+
+    Python's fromisoformat() before 3.11 requires exact 3 or 6 decimal places.
+    """
+    # Replace Z with +00:00 for UTC
+    ts = ts.replace("Z", "+00:00")
+
+    # Find the decimal portion (between . and + or -)
+    match = re.search(r'\.(\d+)([+-])', ts)
+    if match:
+        decimals = match.group(1)
+        sign = match.group(2)
+        # Pad or truncate to exactly 6 digits
+        normalized_decimals = decimals.ljust(6, '0')[:6]
+        ts = re.sub(r'\.(\d+)([+-])', f'.{normalized_decimals}{sign}', ts)
+
+    return datetime.fromisoformat(ts)
 
 
 class RecommendationStatus(Enum):
@@ -347,9 +375,7 @@ class BaseStrategy(ABC):
 
             if result.data:
                 rec.id = result.data[0]["id"]
-                rec.created_at = datetime.fromisoformat(
-                    result.data[0]["created_at"].replace("Z", "+00:00")
-                )
+                rec.created_at = parse_supabase_timestamp(result.data[0]["created_at"])
                 logger.debug(f"Saved recommendation {rec.id} for {rec.symbol}")
                 return rec
 
@@ -406,12 +432,12 @@ class BaseStrategy(ABC):
             # Parse expiry
             expires_at = rec["expires_at"]
             if isinstance(expires_at, str):
-                expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                expires_at = parse_supabase_timestamp(expires_at)
 
             # Parse created_at
             created_at = rec["created_at"]
             if isinstance(created_at, str):
-                created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                created_at = parse_supabase_timestamp(created_at)
 
             outcome_type = None
             exit_price = current_price
