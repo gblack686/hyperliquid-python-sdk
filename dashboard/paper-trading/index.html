@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Paper Trading Dashboard | Hyperliquid Strategies</title>
     <link rel="stylesheet" href="styles.css">
+    <script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -136,6 +137,37 @@
                         <div class="bar-fill" id="momentum-bar" style="width: 0%"></div>
                     </div>
                 </div>
+            </div>
+        </section>
+
+        <!-- Market Charts -->
+        <section class="charts-section">
+            <div class="section-header">
+                <h2>Market Charts</h2>
+            </div>
+            <div class="card charts-card">
+                <div class="charts-controls">
+                    <div class="ticker-tabs">
+                        <button class="ticker-btn active" data-ticker="BTC" onclick="selectTicker('BTC')">BTC</button>
+                        <button class="ticker-btn" data-ticker="SOL" onclick="selectTicker('SOL')">SOL</button>
+                        <button class="ticker-btn" data-ticker="ETH" onclick="selectTicker('ETH')">ETH</button>
+                        <button class="ticker-btn" data-ticker="XRP" onclick="selectTicker('XRP')">XRP</button>
+                        <button class="ticker-btn" data-ticker="HYPE" onclick="selectTicker('HYPE')">HYPE</button>
+                    </div>
+                    <div class="tf-tabs">
+                        <button class="tf-btn" data-tf="15m" onclick="selectTimeframe('15m')">15m</button>
+                        <button class="tf-btn active" data-tf="1h" onclick="selectTimeframe('1h')">1h</button>
+                        <button class="tf-btn" data-tf="4h" onclick="selectTimeframe('4h')">4h</button>
+                        <button class="tf-btn" data-tf="1d" onclick="selectTimeframe('1d')">1d</button>
+                    </div>
+                </div>
+                <div class="chart-price-label">
+                    <span id="chart-ticker-name">BTC</span>
+                    <span id="chart-current-price" class="price">--</span>
+                    <span id="chart-price-change" class="pnl">--</span>
+                </div>
+                <div id="candlestick-chart" class="chart-container"></div>
+                <div id="volume-chart" class="chart-container chart-volume"></div>
             </div>
         </section>
 

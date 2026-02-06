@@ -757,13 +757,292 @@ async function refreshDashboard() {
 async function init() {
     console.log('Initializing Paper Trading Dashboard...');
 
+    // Initialize charts
+    initCharts();
+
     // Initial load
     await refreshDashboard();
 
     // Set up auto-refresh
     setInterval(refreshDashboard, REFRESH_INTERVAL);
 
+    // Refresh chart data every 60s
+    setInterval(loadChartData, REFRESH_INTERVAL);
+
     console.log(`Dashboard initialized. Refreshing every ${REFRESH_INTERVAL / 1000}s`);
+}
+
+// =============================================
+// Market Charts (TradingView Lightweight Charts)
+// =============================================
+
+const HYP_API = 'https://api.hyperliquid.xyz/info';
+let currentTicker = 'BTC';
+let currentTimeframe = '1h';
+let candleChart = null;
+let candleSeries = null;
+let volumeChart = null;
+let volumeSeries = null;
+
+// Timeframe to milliseconds
+const TF_MS = {
+    '15m': 15 * 60 * 1000,
+    '1h': 60 * 60 * 1000,
+    '4h': 4 * 60 * 60 * 1000,
+    '1d': 24 * 60 * 60 * 1000
+};
+
+// Lookback candle counts per timeframe
+const TF_CANDLES = {
+    '15m': 200,
+    '1h': 168,
+    '4h': 120,
+    '1d': 90
+};
+
+// Chart color theme
+const CHART_THEME = {
+    background: '#1a1a24',
+    text: '#a0a0b0',
+    grid: '#2a2a3a',
+    upColor: '#00d26a',
+    downColor: '#ff4757',
+    borderUp: '#00d26a',
+    borderDown: '#ff4757',
+    wickUp: '#00d26a',
+    wickDown: '#ff4757',
+    volUp: 'rgba(0, 210, 106, 0.35)',
+    volDown: 'rgba(255, 71, 87, 0.35)',
+    crosshair: '#606070'
+};
+
+// Initialize charts
+function initCharts() {
+    const candleContainer = document.getElementById('candlestick-chart');
+    const volumeContainer = document.getElementById('volume-chart');
+    if (!candleContainer || !volumeContainer || typeof LightweightCharts === 'undefined') return;
+
+    // Clear any existing charts
+    candleContainer.innerHTML = '';
+    volumeContainer.innerHTML = '';
+
+    // Candlestick chart
+    candleChart = LightweightCharts.createChart(candleContainer, {
+        width: candleContainer.clientWidth,
+        height: 400,
+        layout: {
+            background: { type: 'solid', color: CHART_THEME.background },
+            textColor: CHART_THEME.text,
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+            fontSize: 11
+        },
+        grid: {
+            vertLines: { color: CHART_THEME.grid },
+            horzLines: { color: CHART_THEME.grid }
+        },
+        crosshair: {
+            mode: LightweightCharts.CrosshairMode.Normal,
+            vertLine: { color: CHART_THEME.crosshair, style: 0, width: 1 },
+            horzLine: { color: CHART_THEME.crosshair, style: 0, width: 1 }
+        },
+        rightPriceScale: {
+            borderColor: CHART_THEME.grid,
+            scaleMargins: { top: 0.05, bottom: 0.05 }
+        },
+        timeScale: {
+            borderColor: CHART_THEME.grid,
+            timeVisible: true,
+            secondsVisible: false
+        },
+        handleScroll: { vertTouchDrag: false },
+        handleScale: { axisPressedMouseMove: true }
+    });
+
+    candleSeries = candleChart.addSeries(LightweightCharts.CandlestickSeries, {
+        upColor: CHART_THEME.upColor,
+        downColor: CHART_THEME.downColor,
+        borderUpColor: CHART_THEME.borderUp,
+        borderDownColor: CHART_THEME.borderDown,
+        wickUpColor: CHART_THEME.wickUp,
+        wickDownColor: CHART_THEME.wickDown
+    });
+
+    // Volume chart
+    volumeChart = LightweightCharts.createChart(volumeContainer, {
+        width: volumeContainer.clientWidth,
+        height: 100,
+        layout: {
+            background: { type: 'solid', color: CHART_THEME.background },
+            textColor: CHART_THEME.text,
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+            fontSize: 10
+        },
+        grid: {
+            vertLines: { color: CHART_THEME.grid },
+            horzLines: { color: 'transparent' }
+        },
+        crosshair: {
+            mode: LightweightCharts.CrosshairMode.Normal,
+            vertLine: { color: CHART_THEME.crosshair, style: 0, width: 1 },
+            horzLine: { visible: false }
+        },
+        rightPriceScale: {
+            borderColor: CHART_THEME.grid,
+            scaleMargins: { top: 0.1, bottom: 0 }
+        },
+        timeScale: {
+            visible: false
+        },
+        handleScroll: { vertTouchDrag: false },
+        handleScale: { axisPressedMouseMove: true }
+    });
+
+    volumeSeries = volumeChart.addSeries(LightweightCharts.HistogramSeries, {
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'right'
+    });
+
+    // Sync scrolling between charts
+    candleChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (range) volumeChart.timeScale().setVisibleLogicalRange(range);
+    });
+    volumeChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (range) candleChart.timeScale().setVisibleLogicalRange(range);
+    });
+
+    // Crosshair sync
+    candleChart.subscribeCrosshairMove(param => {
+        if (param.time) {
+            volumeChart.setCrosshairPosition(0, param.time, volumeSeries);
+        } else {
+            volumeChart.clearCrosshairPosition();
+        }
+    });
+    volumeChart.subscribeCrosshairMove(param => {
+        if (param.time) {
+            candleChart.setCrosshairPosition(0, param.time, candleSeries);
+        } else {
+            candleChart.clearCrosshairPosition();
+        }
+    });
+
+    // Resize handler
+    const resizeObserver = new ResizeObserver(() => {
+        candleChart.applyOptions({ width: candleContainer.clientWidth });
+        volumeChart.applyOptions({ width: volumeContainer.clientWidth });
+    });
+    resizeObserver.observe(candleContainer);
+
+    // Load initial data
+    loadChartData();
+}
+
+// Fetch candles from Hyperliquid API
+async function fetchCandles(ticker, interval, count) {
+    const now = Date.now();
+    const ms = TF_MS[interval] || TF_MS['1h'];
+    const startTime = now - (count * ms);
+
+    const response = await fetch(HYP_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            type: 'candleSnapshot',
+            req: {
+                coin: ticker,
+                interval: interval,
+                startTime: startTime,
+                endTime: now
+            }
+        })
+    });
+
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return response.json();
+}
+
+// Transform Hyperliquid candle data to lightweight-charts format
+function transformCandles(rawCandles) {
+    const candleData = [];
+    const volumeData = [];
+
+    rawCandles.forEach(c => {
+        const time = Math.floor(c.t / 1000); // Unix seconds
+        const open = parseFloat(c.o);
+        const high = parseFloat(c.h);
+        const low = parseFloat(c.l);
+        const close = parseFloat(c.c);
+        const volume = parseFloat(c.v);
+
+        candleData.push({ time, open, high, low, close });
+        volumeData.push({
+            time,
+            value: volume,
+            color: close >= open ? CHART_THEME.volUp : CHART_THEME.volDown
+        });
+    });
+
+    return { candleData, volumeData };
+}
+
+// Load chart data for current ticker/timeframe
+async function loadChartData() {
+    if (!candleSeries || !volumeSeries) return;
+
+    try {
+        const count = TF_CANDLES[currentTimeframe] || 168;
+        const rawCandles = await fetchCandles(currentTicker, currentTimeframe, count);
+
+        if (!rawCandles || rawCandles.length === 0) {
+            console.warn('No candle data returned');
+            return;
+        }
+
+        const { candleData, volumeData } = transformCandles(rawCandles);
+
+        candleSeries.setData(candleData);
+        volumeSeries.setData(volumeData);
+
+        // Fit content
+        candleChart.timeScale().fitContent();
+        volumeChart.timeScale().fitContent();
+
+        // Update price label
+        const lastCandle = rawCandles[rawCandles.length - 1];
+        const firstCandle = rawCandles[0];
+        const currentPrice = parseFloat(lastCandle.c);
+        const openPrice = parseFloat(firstCandle.o);
+        const changePct = ((currentPrice - openPrice) / openPrice * 100);
+
+        document.getElementById('chart-ticker-name').textContent = currentTicker;
+        document.getElementById('chart-current-price').textContent = formatPrice(currentPrice);
+
+        const changeEl = document.getElementById('chart-price-change');
+        const sign = changePct >= 0 ? '+' : '';
+        changeEl.textContent = `${sign}${changePct.toFixed(2)}%`;
+        changeEl.className = `pnl ${changePct >= 0 ? 'positive' : 'negative'}`;
+
+    } catch (err) {
+        console.error('Failed to load chart data:', err);
+    }
+}
+
+// Ticker selection
+function selectTicker(ticker) {
+    currentTicker = ticker;
+    document.querySelectorAll('.ticker-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.ticker === ticker);
+    });
+    loadChartData();
+}
+
+// Timeframe selection
+function selectTimeframe(tf) {
+    currentTimeframe = tf;
+    document.querySelectorAll('.tf-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tf === tf);
+    });
+    loadChartData();
 }
 
 // Tab switching
