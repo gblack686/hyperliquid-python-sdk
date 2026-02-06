@@ -368,7 +368,7 @@ def main():
         if not address:
             from dotenv import load_dotenv
             load_dotenv()
-            address = os.getenv("HL_ADDRESS") or os.getenv("HYPERLIQUID_ADDRESS")
+            address = os.getenv("ACCOUNT_ADDRESS") or os.getenv("HL_ADDRESS") or os.getenv("HYPERLIQUID_ADDRESS")
         if not address:
             print("[!] No address found. Set HL_ADDRESS in .env or use --address", file=sys.stderr)
             sys.exit(1)
@@ -408,7 +408,7 @@ def main():
           f"from {fmt_ts(start)} to {fmt_ts(end)}", file=sys.stderr)
 
     raw = info.candles_snapshot(
-        coin=ticker,
+        name=ticker,
         interval=args.timeframe,
         startTime=start,
         endTime=end,
