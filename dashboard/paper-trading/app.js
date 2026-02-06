@@ -295,22 +295,130 @@ function updateTimestamp() {
     document.getElementById('last-updated').textContent = `Updated: ${timeStr} UTC`;
 }
 
+// Fetch enhanced metrics from paper_strategy_metrics table
+async function fetchEnhancedMetrics() {
+    try {
+        return await supabaseQuery('paper_strategy_metrics', {
+            'select': '*',
+            'order': 'period_end.desc',
+            'limit': '20'
+        });
+    } catch (e) {
+        console.warn('Enhanced metrics not available:', e);
+        return [];
+    }
+}
+
+// Update enhanced analytics panel
+function updateEnhancedAnalytics(metrics) {
+    if (!metrics || metrics.length === 0) {
+        return;
+    }
+
+    // Aggregate across strategies for the most recent period
+    let totalWins = 0, totalLosses = 0, totalPnl = 0;
+    const allReturns = [];
+
+    metrics.forEach(m => {
+        totalWins += (m.winning_trades || 0);
+        totalLosses += (m.losing_trades || 0);
+        totalPnl += (m.total_pnl_pct || 0);
+        if (m.avg_pnl_pct) allReturns.push(m.avg_pnl_pct);
+    });
+
+    // Compute Sharpe approximation from available data
+    if (allReturns.length > 0) {
+        const mean = allReturns.reduce((a, b) => a + b, 0) / allReturns.length;
+        const variance = allReturns.reduce((a, b) => a + (b - mean) ** 2, 0) / allReturns.length;
+        const std = Math.sqrt(variance);
+        const sharpe = std > 0 ? (mean / std * Math.sqrt(365)).toFixed(2) : 'N/A';
+
+        const sharpeEl = document.getElementById('sharpe-ratio');
+        if (sharpeEl) {
+            sharpeEl.textContent = sharpe;
+            const qualityEl = document.getElementById('sharpe-quality');
+            if (qualityEl) {
+                const s = parseFloat(sharpe);
+                if (s > 2) qualityEl.textContent = 'Excellent';
+                else if (s > 1) qualityEl.textContent = 'Good';
+                else if (s > 0) qualityEl.textContent = 'Positive';
+                else qualityEl.textContent = 'Negative';
+            }
+        }
+
+        // Sortino (approximate using only negative returns as denominator)
+        const negReturns = allReturns.filter(r => r < 0);
+        const downVar = negReturns.length > 0
+            ? negReturns.reduce((a, b) => a + b ** 2, 0) / negReturns.length
+            : 0;
+        const downStd = Math.sqrt(downVar);
+        const sortino = downStd > 0 ? (mean / downStd * Math.sqrt(365)).toFixed(2) : 'N/A';
+        const sortinoEl = document.getElementById('sortino-ratio');
+        if (sortinoEl) {
+            sortinoEl.textContent = sortino;
+            const qualityEl = document.getElementById('sortino-quality');
+            if (qualityEl) {
+                const s = parseFloat(sortino);
+                if (s > 3) qualityEl.textContent = 'Excellent';
+                else if (s > 1.5) qualityEl.textContent = 'Good';
+                else if (s > 0) qualityEl.textContent = 'Positive';
+                else qualityEl.textContent = 'Negative';
+            }
+        }
+    }
+
+    // Max drawdown from metrics
+    const maxLosses = metrics.map(m => m.max_loss_pct || 0);
+    const maxDD = Math.min(...maxLosses);
+    const ddEl = document.getElementById('max-drawdown');
+    if (ddEl) {
+        ddEl.textContent = `${maxDD.toFixed(2)}%`;
+        ddEl.className = `metric-value ${maxDD < -5 ? 'negative' : maxDD < 0 ? '' : 'positive'}`;
+        const qualityEl = document.getElementById('drawdown-quality');
+        if (qualityEl) {
+            if (maxDD > -2) qualityEl.textContent = 'Low risk';
+            else if (maxDD > -5) qualityEl.textContent = 'Moderate';
+            else qualityEl.textContent = 'High risk';
+        }
+    }
+
+    // Profit factor
+    const profitFactors = metrics.map(m => m.profit_factor || 0).filter(p => p > 0);
+    const avgPF = profitFactors.length > 0
+        ? (profitFactors.reduce((a, b) => a + b, 0) / profitFactors.length).toFixed(2)
+        : 'N/A';
+    const pfEl = document.getElementById('profit-factor');
+    if (pfEl) {
+        pfEl.textContent = avgPF;
+        const qualityEl = document.getElementById('factor-quality');
+        if (qualityEl) {
+            const pf = parseFloat(avgPF);
+            if (pf > 2) qualityEl.textContent = 'Strong edge';
+            else if (pf > 1.5) qualityEl.textContent = 'Good edge';
+            else if (pf > 1) qualityEl.textContent = 'Marginal';
+            else qualityEl.textContent = 'No edge';
+        }
+    }
+}
+
 // Main refresh function
 async function refreshDashboard() {
     try {
         console.log('Refreshing dashboard...');
 
         // Fetch all data in parallel
-        const [activeSignals, recentRecs, recentOutcomes] = await Promise.all([
+        const [activeSignals, recentRecs, recentOutcomes, enhancedMetrics] = await Promise.all([
             fetchActiveSignals(),
             fetchRecentRecommendations(),
-            fetchRecentOutcomes()
+            fetchRecentOutcomes(),
+            fetchEnhancedMetrics()
         ]);
 
         console.log('Data fetched:', {
             active: activeSignals.length,
             recent: recentRecs.length,
-            outcomes: recentOutcomes.length
+            outcomes: recentOutcomes.length,
+            enhanced: enhancedMetrics.length
         });
 
         // Update all sections
@@ -318,6 +426,7 @@ async function refreshDashboard() {
         updateStrategyCards(recentRecs, recentOutcomes);
         renderActiveSignals(activeSignals);
         renderOutcomes(recentOutcomes);
+        updateEnhancedAnalytics(enhancedMetrics);
         updateTimestamp();
 
         // Update status indicator
