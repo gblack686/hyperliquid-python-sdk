@@ -295,6 +295,60 @@ function updateTimestamp() {
     document.getElementById('last-updated').textContent = `Updated: ${timeStr} UTC`;
 }
 
+// Fetch recent backtest results
+async function fetchBacktestResults() {
+    try {
+        return await supabaseQuery('paper_backtest_results', {
+            'select': 'id,created_at,engine,formula,strategy_name,tickers,total_return_pct,sharpe_ratio,max_drawdown,win_rate',
+            'order': 'created_at.desc',
+            'limit': '10'
+        });
+    } catch (e) {
+        console.warn('Backtest results not available:', e);
+        return [];
+    }
+}
+
+// Render backtest results table
+function renderBacktestResults(backtests) {
+    const tbody = document.getElementById('backtests-tbody');
+    const countEl = document.getElementById('backtests-count');
+    if (!tbody || !countEl) return;
+
+    countEl.textContent = backtests.length;
+
+    if (backtests.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="loading">No backtests yet</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = backtests.map(bt => {
+        const createdAt = new Date(bt.created_at);
+        const label = bt.formula
+            ? bt.formula.substring(0, 40) + (bt.formula.length > 40 ? '...' : '')
+            : bt.strategy_name || '--';
+        const tickers = Array.isArray(bt.tickers) ? bt.tickers.join(', ') : '--';
+        const retPct = bt.total_return_pct != null ? parseFloat(bt.total_return_pct) : null;
+        const sharpe = bt.sharpe_ratio != null ? parseFloat(bt.sharpe_ratio).toFixed(2) : '--';
+        const maxDD = bt.max_drawdown != null ? (parseFloat(bt.max_drawdown) * 100).toFixed(1) + '%' : '--';
+        const winRate = bt.win_rate != null ? (parseFloat(bt.win_rate) * 100).toFixed(0) + '%' : '--';
+        const retFormatted = retPct != null ? formatPnl(retPct, true) : { formatted: '--', colorClass: '' };
+
+        return `
+            <tr>
+                <td>${timeAgo(createdAt)}</td>
+                <td><span class="strategy-tag">${bt.engine || '--'}</span></td>
+                <td><code>${label}</code></td>
+                <td>${tickers}</td>
+                <td><span class="pnl ${retFormatted.colorClass}">${retFormatted.formatted}</span></td>
+                <td>${sharpe}</td>
+                <td>${maxDD}</td>
+                <td>${winRate}</td>
+            </tr>
+        `;
+    }).join('');
+}
+
 // Fetch enhanced metrics from paper_strategy_metrics table
 async function fetchEnhancedMetrics() {
     try {
@@ -407,18 +461,20 @@ async function refreshDashboard() {
         console.log('Refreshing dashboard...');
 
         // Fetch all data in parallel
-        const [activeSignals, recentRecs, recentOutcomes, enhancedMetrics] = await Promise.all([
+        const [activeSignals, recentRecs, recentOutcomes, enhancedMetrics, backtestResults] = await Promise.all([
             fetchActiveSignals(),
             fetchRecentRecommendations(),
             fetchRecentOutcomes(),
-            fetchEnhancedMetrics()
+            fetchEnhancedMetrics(),
+            fetchBacktestResults()
         ]);
 
         console.log('Data fetched:', {
             active: activeSignals.length,
             recent: recentRecs.length,
             outcomes: recentOutcomes.length,
-            enhanced: enhancedMetrics.length
+            enhanced: enhancedMetrics.length,
+            backtests: backtestResults.length
         });
 
         // Update all sections
@@ -427,6 +483,7 @@ async function refreshDashboard() {
         renderActiveSignals(activeSignals);
         renderOutcomes(recentOutcomes);
         updateEnhancedAnalytics(enhancedMetrics);
+        renderBacktestResults(backtestResults);
         updateTimestamp();
 
         // Update status indicator

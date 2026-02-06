@@ -45,6 +45,16 @@ from scripts.paper_trading.strategies import (
     DirectionalStrategy,
 )
 
+# QuantPyLib integration (optional upgrade)
+try:
+    from integrations.quantpylib.data_pipeline import HyperliquidDataPipeline
+    from integrations.quantpylib.enhanced_metrics import EnhancedMetricsCalculator
+    from integrations.quantpylib.rate_limiter import RateLimiter
+    HAS_QUANTPYLIB_BRIDGE = True
+except ImportError:
+    HAS_QUANTPYLIB_BRIDGE = False
+    logger.info("QuantPyLib bridge not available - using standard pipeline")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -129,6 +139,16 @@ class PaperTradingScheduler:
         self.metrics_calculator = MetricsCalculator()
         self.telegram = TelegramAlerts() if self.enable_telegram else None
         self.scheduler = None
+
+        # QuantPyLib upgrades (optional)
+        self.data_pipeline = None
+        self.enhanced_metrics = None
+        self.rate_limiter = None
+        if HAS_QUANTPYLIB_BRIDGE:
+            self.data_pipeline = HyperliquidDataPipeline()
+            self.enhanced_metrics = EnhancedMetricsCalculator()
+            self.rate_limiter = RateLimiter()
+            logger.info("QuantPyLib bridge loaded: async pipeline + enhanced metrics")
 
     async def run_all_strategies(self) -> List[Recommendation]:
         """Run all strategies and return recommendations"""
@@ -216,12 +236,35 @@ class PaperTradingScheduler:
         try:
             logger.info("Updating metrics...")
             await self.metrics_calculator.calculate_all_metrics()
+
+            # Run enhanced metrics if available
+            if self.enhanced_metrics:
+                try:
+                    comparison = await self.enhanced_metrics.compare_all_strategies(period="30d")
+                    strategies = comparison.get("strategies", {})
+                    for name, metrics in strategies.items():
+                        if metrics:
+                            await self.enhanced_metrics.save_enhanced_metrics(name, "30d", metrics)
+                    best = comparison.get("best_sharpe")
+                    if best:
+                        logger.info(f"Enhanced metrics updated (best Sharpe: {best})")
+                except Exception as e:
+                    logger.warning(f"Enhanced metrics update failed: {e}")
+
             logger.info("Metrics updated")
         except Exception as e:
             logger.error(f"Error updating metrics: {e}")
 
     async def _get_current_prices(self) -> Dict[str, float]:
         """Get current prices for all symbols"""
+        # Use async pipeline if available (faster, rate-limited)
+        if self.data_pipeline:
+            try:
+                return await self.data_pipeline.get_prices()
+            except Exception as e:
+                logger.warning(f"Async pipeline price fetch failed, falling back: {e}")
+
+        # Fallback to synchronous SDK
         try:
             info = Info(constants.MAINNET_API_URL, skip_ws=True)
             meta_and_ctxs = info.meta_and_asset_ctxs()
@@ -249,9 +292,18 @@ class PaperTradingScheduler:
 
     async def run_once(self):
         """Run all tasks once"""
-        await self.run_all_strategies()
-        await self.check_all_outcomes()
-        await self.update_metrics()
+        # Initialize async pipeline if available
+        if self.data_pipeline:
+            await self.data_pipeline.initialize()
+
+        try:
+            await self.run_all_strategies()
+            await self.check_all_outcomes()
+            await self.update_metrics()
+        finally:
+            # Cleanup async pipeline connections
+            if self.data_pipeline:
+                await self.data_pipeline.cleanup()
 
     async def get_status(self) -> Dict:
         """Get current status"""

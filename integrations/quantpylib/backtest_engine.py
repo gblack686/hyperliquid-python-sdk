@@ -12,12 +12,23 @@ Key upgrades over the existing agp_strategy_backtest.py:
 - GeneticAlpha formula-based strategy discovery
 """
 
+import os
 import logging
 import asyncio
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Callable
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+try:
+    from supabase import create_client
+    HAS_SUPABASE = True
+except ImportError:
+    HAS_SUPABASE = False
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +332,87 @@ class QuantBacktester:
             "tickers": tickers,
             "engine": "none",
         }
+
+    async def save_results_to_supabase(
+        self,
+        results: Dict[str, Any],
+    ) -> Optional[str]:
+        """
+        Save backtest results to the paper_backtest_results table.
+
+        Args:
+            results: Dict from run_genetic_backtest or run_strategy_backtest
+
+        Returns:
+            Record ID if saved, None otherwise
+        """
+        if not HAS_SUPABASE:
+            logger.warning("Supabase not available - cannot save backtest results")
+            return None
+
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_KEY")
+        if not url or not key:
+            return None
+
+        try:
+            supabase = create_client(url, key)
+            metrics = results.get("metrics", {})
+
+            # Build equity curve summary (sample to max 500 points)
+            equity_curve = None
+            portfolio_df = results.get("portfolio_df")
+            if portfolio_df is not None and "capital" in portfolio_df.columns:
+                capital_series = portfolio_df["capital"]
+                step = max(1, len(capital_series) // 500)
+                sampled = capital_series.iloc[::step]
+                equity_curve = [
+                    {"t": str(idx), "v": round(float(val), 2)}
+                    for idx, val in sampled.items()
+                ]
+
+            data = {
+                "engine": results.get("engine", "unknown"),
+                "formula": results.get("formula"),
+                "strategy_name": results.get("strategy_name"),
+                "tickers": results.get("tickers", []),
+                "granularity": results.get("granularity", "hourly"),
+                "starting_capital": 10000,
+                "portfolio_vol": 0.20,
+                "terminal_value": results.get("terminal_value"),
+                "total_return_pct": results.get("total_return_pct"),
+                "sharpe_ratio": metrics.get("sharpe"),
+                "sortino_ratio": metrics.get("sortino"),
+                "max_drawdown": metrics.get("max_dd"),
+                "cagr": metrics.get("cagr"),
+                "omega_ratio": metrics.get("omega") or metrics.get("omega(0)"),
+                "profit_factor": metrics.get("profit_factor"),
+                "win_rate": metrics.get("win_rate"),
+                "var_95": metrics.get("VaR95"),
+                "cvar_95": metrics.get("cVaR95"),
+                "gain_to_pain": metrics.get("gain_to_pain"),
+                "skewness": metrics.get("skew_ret"),
+                "kurtosis": metrics.get("kurt_exc"),
+                "equity_curve": equity_curve,
+                "metrics_json": metrics,
+            }
+
+            # Add hypothesis test results if present
+            for key_name in ["timer_p", "picker_p", "trader_p1", "trader_p2"]:
+                if key_name in results:
+                    data[key_name] = results[key_name]
+
+            result = supabase.table("paper_backtest_results").insert(data).execute()
+
+            if result.data:
+                record_id = result.data[0]["id"]
+                logger.info(f"Backtest results saved: {record_id}")
+                return record_id
+
+        except Exception as e:
+            logger.error(f"Error saving backtest results: {e}")
+
+        return None
 
     @staticmethod
     def available_gene_operations() -> List[str]:

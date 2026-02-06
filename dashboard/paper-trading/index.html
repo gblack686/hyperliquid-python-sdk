@@ -212,6 +212,33 @@
             </div>
         </section>
 
+        <!-- Backtest Results -->
+        <section class="backtests-section">
+            <div class="section-header">
+                <h2>Recent Backtests</h2>
+                <span class="badge" id="backtests-count">0</span>
+            </div>
+            <div class="card table-card">
+                <table class="data-table" id="backtests-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Engine</th>
+                            <th>Formula / Strategy</th>
+                            <th>Tickers</th>
+                            <th>Return</th>
+                            <th>Sharpe</th>
+                            <th>Max DD</th>
+                            <th>Win Rate</th>
+                        </tr>
+                    </thead>
+                    <tbody id="backtests-tbody">
+                        <tr><td colspan="8" class="loading">No backtests yet</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
         <!-- Footer -->
         <footer class="footer">
             <p>Paper Trading System - For educational purposes only. Not financial advice.</p>
