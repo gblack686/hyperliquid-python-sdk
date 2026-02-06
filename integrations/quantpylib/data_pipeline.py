@@ -3,6 +3,9 @@ Async Data Pipeline Bridge
 ===========================
 Replaces synchronous info.candles_snapshot() calls with async DataPoller
 for 5-10x faster multi-ticker data fetching.
+
+Includes an in-memory TTL cache so repeated requests for the same ticker/interval
+(e.g., when 3 strategies all need BTC 1h candles) hit the API only once.
 """
 
 import os
@@ -12,7 +15,7 @@ import asyncio
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 from dotenv import load_dotenv
 
@@ -26,9 +29,74 @@ try:
 except ImportError:
     HAS_QUANTPYLIB = False
 
+try:
+    from quantpylib.datapoller.master import DataPoller
+    HAS_DATAPOLLER = True
+except ImportError:
+    HAS_DATAPOLLER = False
+
 # Always available - the native SDK
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
+
+
+class CandleCache:
+    """
+    In-memory TTL cache for candle DataFrames.
+
+    Avoids redundant API calls when multiple strategies need the same data
+    within a short time window. Default TTL is 5 minutes.
+    """
+
+    def __init__(self, ttl_seconds: int = 300):
+        self._ttl = ttl_seconds
+        self._store: Dict[str, Tuple[float, pd.DataFrame]] = {}
+        self._hits = 0
+        self._misses = 0
+
+    def _key(self, ticker: str, interval: str, lookback_hours: int) -> str:
+        return f"{ticker}:{interval}:{lookback_hours}"
+
+    def get(self, ticker: str, interval: str, lookback_hours: int) -> Optional[pd.DataFrame]:
+        """Get cached DataFrame if still valid."""
+        key = self._key(ticker, interval, lookback_hours)
+        entry = self._store.get(key)
+        if entry is None:
+            self._misses += 1
+            return None
+
+        ts, df = entry
+        if time.time() - ts > self._ttl:
+            del self._store[key]
+            self._misses += 1
+            return None
+
+        self._hits += 1
+        return df.copy()
+
+    def put(self, ticker: str, interval: str, lookback_hours: int, df: pd.DataFrame):
+        """Store a DataFrame in the cache."""
+        key = self._key(ticker, interval, lookback_hours)
+        self._store[key] = (time.time(), df)
+
+    def invalidate(self, ticker: Optional[str] = None):
+        """Invalidate cache entries. If ticker is None, clears everything."""
+        if ticker is None:
+            self._store.clear()
+        else:
+            keys_to_remove = [k for k in self._store if k.startswith(f"{ticker}:")]
+            for k in keys_to_remove:
+                del self._store[k]
+
+    @property
+    def stats(self) -> Dict[str, Any]:
+        total = self._hits + self._misses
+        return {
+            "entries": len(self._store),
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": f"{self._hits / total:.0%}" if total > 0 else "N/A",
+        }
 
 
 class HyperliquidDataPipeline:
@@ -39,15 +107,23 @@ class HyperliquidDataPipeline:
     for optimal data retrieval. Falls back gracefully when quantpylib
     is not available.
 
+    Features:
+    - In-memory TTL cache (default 5 min) prevents duplicate API calls
+    - Optional DataPoller integration for multi-source data
+    - Async-first with sync fallback via run_in_executor
+
     Usage:
         pipeline = HyperliquidDataPipeline()
         await pipeline.initialize()
 
-        # Single ticker
+        # Single ticker (cached)
         df = await pipeline.get_candles("BTC", interval="1h", lookback_hours=100)
 
-        # Multiple tickers (parallel)
+        # Multiple tickers (parallel, cached)
         dfs = await pipeline.get_candles_multi(["BTC", "ETH", "SOL"], interval="1h")
+
+        # Cache stats
+        print(pipeline.cache_stats)
 
         # Market snapshot
         snapshot = await pipeline.get_market_snapshot()
@@ -55,10 +131,12 @@ class HyperliquidDataPipeline:
         await pipeline.cleanup()
     """
 
-    def __init__(self):
+    def __init__(self, cache_ttl_seconds: int = 300):
         self._hyp: Optional[Hyperliquid] = None
+        self._datapoller: Optional[Any] = None
         self._info: Optional[Info] = None
         self._initialized = False
+        self._cache = CandleCache(ttl_seconds=cache_ttl_seconds)
 
     async def initialize(self):
         """Initialize data sources."""
@@ -68,8 +146,25 @@ class HyperliquidDataPipeline:
         # Native SDK (always available, synchronous)
         self._info = Info(constants.MAINNET_API_URL, skip_ws=True)
 
-        # QuantPyLib async wrapper (optional, faster for bulk data)
-        if HAS_QUANTPYLIB:
+        # Try DataPoller first (unified multi-source interface)
+        if HAS_DATAPOLLER:
+            try:
+                config = {
+                    "hyperliquid": {
+                        "alias": "hyp",
+                        "key": os.getenv("HYP_KEY", ""),
+                        "secret": os.getenv("HYP_SECRET", ""),
+                    }
+                }
+                self._datapoller = DataPoller(config_keys=config)
+                await self._datapoller.init_clients()
+                logger.info("DataPoller initialized (unified multi-source pipeline)")
+            except Exception as e:
+                logger.warning(f"DataPoller init failed: {e}")
+                self._datapoller = None
+
+        # Fallback: direct Hyperliquid wrapper (optional, faster than native SDK)
+        if not self._datapoller and HAS_QUANTPYLIB:
             try:
                 self._hyp = Hyperliquid(
                     key=os.getenv("HYP_KEY"),
@@ -86,19 +181,37 @@ class HyperliquidDataPipeline:
 
     async def cleanup(self):
         """Clean up connections."""
+        if self._datapoller:
+            try:
+                await self._datapoller.cleanup_clients()
+            except Exception:
+                pass
+            self._datapoller = None
         if self._hyp:
             try:
                 await self._hyp.cleanup()
             except Exception:
                 pass
             self._hyp = None
+        if self._cache:
+            logger.debug(f"Cache stats at cleanup: {self._cache.stats}")
         self._initialized = False
+
+    @property
+    def cache_stats(self) -> Dict[str, Any]:
+        """Get cache hit/miss statistics."""
+        return self._cache.stats
+
+    def clear_cache(self, ticker: Optional[str] = None):
+        """Clear cached data. If ticker is None, clears all entries."""
+        self._cache.invalidate(ticker)
 
     async def get_candles(
         self,
         ticker: str,
         interval: str = "1h",
         lookback_hours: int = 100,
+        skip_cache: bool = False,
     ) -> Optional[pd.DataFrame]:
         """
         Get OHLCV candle data for a single ticker.
@@ -107,6 +220,7 @@ class HyperliquidDataPipeline:
             ticker: Asset symbol (e.g., "BTC")
             interval: Candle interval ("1m", "5m", "15m", "1h", "4h", "1d")
             lookback_hours: Hours of historical data to fetch
+            skip_cache: If True, bypass cache and fetch fresh data
 
         Returns:
             DataFrame with columns: open, high, low, close, volume, timestamp
@@ -114,9 +228,83 @@ class HyperliquidDataPipeline:
         """
         await self.initialize()
 
-        if self._hyp:
-            return await self._get_candles_quantpylib(ticker, interval, lookback_hours)
-        return await self._get_candles_native(ticker, interval, lookback_hours)
+        # Check cache first
+        if not skip_cache:
+            cached = self._cache.get(ticker, interval, lookback_hours)
+            if cached is not None:
+                logger.debug(f"Cache hit: {ticker} {interval} {lookback_hours}h")
+                return cached
+
+        # Fetch fresh data (priority: DataPoller > Hyperliquid wrapper > native SDK)
+        df = None
+        if self._datapoller:
+            df = await self._get_candles_datapoller(ticker, interval, lookback_hours)
+        if df is None and self._hyp:
+            df = await self._get_candles_quantpylib(ticker, interval, lookback_hours)
+        if df is None:
+            df = await self._get_candles_native(ticker, interval, lookback_hours)
+
+        # Store in cache
+        if df is not None:
+            self._cache.put(ticker, interval, lookback_hours, df)
+
+        return df
+
+    async def _get_candles_datapoller(
+        self, ticker: str, interval: str, lookback_hours: int
+    ) -> Optional[pd.DataFrame]:
+        """Fetch candles via DataPoller (unified multi-source interface)."""
+        try:
+            now = datetime.now(timezone.utc)
+            start = datetime.fromtimestamp(
+                time.time() - (lookback_hours * 3600), tz=timezone.utc
+            )
+
+            # Map interval to DataPoller granularity format
+            gran_map = {
+                "1m": ("m", 1), "5m": ("m", 5), "15m": ("m", 15),
+                "1h": ("h", 1), "4h": ("h", 4), "1d": ("d", 1),
+            }
+            gran, gran_mult = gran_map.get(interval, ("h", 1))
+
+            df = await self._datapoller.crypto.get_trade_bars(
+                ticker=ticker,
+                start=start,
+                end=now,
+                granularity=gran,
+                granularity_multiplier=gran_mult,
+                src="hyp",
+            )
+
+            if df is None or len(df) < 2:
+                return None
+
+            # Normalize columns to our standard format
+            col_map = {}
+            for col in df.columns:
+                lower = col.lower()
+                if lower in ("open", "high", "low", "close", "volume"):
+                    col_map[col] = lower
+            if col_map:
+                df = df.rename(columns=col_map)
+
+            for col in ["open", "high", "low", "close", "volume"]:
+                if col in df.columns:
+                    df[col] = df[col].astype(float)
+
+            # Ensure UTC datetime index
+            if not isinstance(df.index, pd.DatetimeIndex):
+                if "timestamp" in df.columns:
+                    df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+                    df = df.set_index("datetime")
+            elif df.index.tz is None:
+                df.index = df.index.tz_localize("UTC")
+
+            return df
+
+        except Exception as e:
+            logger.warning(f"DataPoller candle fetch failed for {ticker}: {e}")
+            return None
 
     async def _get_candles_quantpylib(
         self, ticker: str, interval: str, lookback_hours: int

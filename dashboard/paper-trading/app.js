@@ -299,7 +299,7 @@ function updateTimestamp() {
 async function fetchBacktestResults() {
     try {
         return await supabaseQuery('paper_backtest_results', {
-            'select': 'id,created_at,engine,formula,strategy_name,tickers,total_return_pct,sharpe_ratio,max_drawdown,win_rate',
+            'select': 'id,created_at,engine,formula,strategy_name,tickers,total_return_pct,sharpe_ratio,max_drawdown,win_rate,sortino_ratio,cagr,profit_factor,equity_curve,starting_capital,terminal_value',
             'order': 'created_at.desc',
             'limit': '10'
         });
@@ -309,7 +309,7 @@ async function fetchBacktestResults() {
     }
 }
 
-// Render backtest results table
+// Render backtest results table with expandable equity curve
 function renderBacktestResults(backtests) {
     const tbody = document.getElementById('backtests-tbody');
     const countEl = document.getElementById('backtests-count');
@@ -322,7 +322,10 @@ function renderBacktestResults(backtests) {
         return;
     }
 
-    tbody.innerHTML = backtests.map(bt => {
+    // Store backtests globally for chart rendering
+    window._backtestData = backtests;
+
+    tbody.innerHTML = backtests.map((bt, idx) => {
         const createdAt = new Date(bt.created_at);
         const label = bt.formula
             ? bt.formula.substring(0, 40) + (bt.formula.length > 40 ? '...' : '')
@@ -333,9 +336,12 @@ function renderBacktestResults(backtests) {
         const maxDD = bt.max_drawdown != null ? (parseFloat(bt.max_drawdown) * 100).toFixed(1) + '%' : '--';
         const winRate = bt.win_rate != null ? (parseFloat(bt.win_rate) * 100).toFixed(0) + '%' : '--';
         const retFormatted = retPct != null ? formatPnl(retPct, true) : { formatted: '--', colorClass: '' };
+        const hasChart = bt.equity_curve && bt.equity_curve.length > 1;
+        const cursor = hasChart ? 'cursor: pointer;' : '';
 
-        return `
-            <tr>
+        // Main row
+        let html = `
+            <tr onclick="${hasChart ? `toggleEquityCurve(${idx})` : ''}" style="${cursor}" title="${hasChart ? 'Click to view equity curve' : ''}">
                 <td>${timeAgo(createdAt)}</td>
                 <td><span class="strategy-tag">${bt.engine || '--'}</span></td>
                 <td><code>${label}</code></td>
@@ -344,9 +350,174 @@ function renderBacktestResults(backtests) {
                 <td>${sharpe}</td>
                 <td>${maxDD}</td>
                 <td>${winRate}</td>
-            </tr>
-        `;
+            </tr>`;
+
+        // Expandable detail row (hidden by default)
+        if (hasChart) {
+            const sortino = bt.sortino_ratio != null ? parseFloat(bt.sortino_ratio).toFixed(2) : '--';
+            const cagr = bt.cagr != null ? (parseFloat(bt.cagr) * 100).toFixed(1) + '%' : '--';
+            const pf = bt.profit_factor != null ? parseFloat(bt.profit_factor).toFixed(2) : '--';
+            const start = bt.starting_capital != null ? '$' + parseFloat(bt.starting_capital).toLocaleString() : '--';
+            const end = bt.terminal_value != null ? '$' + parseFloat(bt.terminal_value).toLocaleString(undefined, {maximumFractionDigits: 2}) : '--';
+
+            html += `
+            <tr id="bt-detail-${idx}" class="bt-detail-row" style="display: none;">
+                <td colspan="8">
+                    <div class="bt-detail-panel">
+                        <div class="bt-detail-metrics">
+                            <div class="bt-metric"><span class="bt-metric-label">Sortino</span><span class="bt-metric-val">${sortino}</span></div>
+                            <div class="bt-metric"><span class="bt-metric-label">CAGR</span><span class="bt-metric-val">${cagr}</span></div>
+                            <div class="bt-metric"><span class="bt-metric-label">Profit Factor</span><span class="bt-metric-val">${pf}</span></div>
+                            <div class="bt-metric"><span class="bt-metric-label">Start</span><span class="bt-metric-val">${start}</span></div>
+                            <div class="bt-metric"><span class="bt-metric-label">End</span><span class="bt-metric-val">${end}</span></div>
+                        </div>
+                        <div class="bt-chart-container">
+                            <canvas id="bt-chart-${idx}" width="800" height="200"></canvas>
+                        </div>
+                    </div>
+                </td>
+            </tr>`;
+        }
+
+        return html;
     }).join('');
+}
+
+// Toggle equity curve detail row
+function toggleEquityCurve(idx) {
+    const row = document.getElementById(`bt-detail-${idx}`);
+    if (!row) return;
+
+    if (row.style.display === 'none') {
+        row.style.display = '';
+        const canvas = document.getElementById(`bt-chart-${idx}`);
+        if (canvas && window._backtestData && window._backtestData[idx]) {
+            drawEquityCurve(canvas, window._backtestData[idx]);
+        }
+    } else {
+        row.style.display = 'none';
+    }
+}
+
+// Draw equity curve on a canvas
+function drawEquityCurve(canvas, backtest) {
+    const curve = backtest.equity_curve;
+    if (!curve || curve.length < 2) return;
+
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.parentElement.getBoundingClientRect();
+
+    // Size canvas to container
+    canvas.width = rect.width * dpr;
+    canvas.height = 200 * dpr;
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = '200px';
+    ctx.scale(dpr, dpr);
+
+    const w = rect.width;
+    const h = 200;
+    const pad = { top: 20, right: 60, bottom: 30, left: 70 };
+    const plotW = w - pad.left - pad.right;
+    const plotH = h - pad.top - pad.bottom;
+
+    // Extract values
+    const values = curve.map(p => p.v);
+    const minVal = Math.min(...values);
+    const maxVal = Math.max(...values);
+    const range = maxVal - minVal || 1;
+    const startVal = values[0];
+
+    // Clear
+    ctx.clearRect(0, 0, w, h);
+
+    // Background
+    ctx.fillStyle = '#12121a';
+    ctx.fillRect(0, 0, w, h);
+
+    // Grid lines
+    ctx.strokeStyle = '#2a2a3a';
+    ctx.lineWidth = 0.5;
+    const gridLines = 4;
+    for (let i = 0; i <= gridLines; i++) {
+        const y = pad.top + (plotH / gridLines) * i;
+        ctx.beginPath();
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(w - pad.right, y);
+        ctx.stroke();
+
+        // Y-axis labels
+        const val = maxVal - (range / gridLines) * i;
+        ctx.fillStyle = '#606070';
+        ctx.font = '11px JetBrains Mono, monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText('$' + val.toLocaleString(undefined, {maximumFractionDigits: 0}), pad.left - 8, y + 4);
+    }
+
+    // Starting capital reference line
+    if (startVal >= minVal && startVal <= maxVal) {
+        const startY = pad.top + plotH - ((startVal - minVal) / range) * plotH;
+        ctx.strokeStyle = '#606070';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(pad.left, startY);
+        ctx.lineTo(w - pad.right, startY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    // Determine color based on final return
+    const finalVal = values[values.length - 1];
+    const isProfit = finalVal >= startVal;
+    const lineColor = isProfit ? '#00d26a' : '#ff4757';
+    const fillColor = isProfit ? 'rgba(0, 210, 106, 0.08)' : 'rgba(255, 71, 87, 0.08)';
+
+    // Draw area fill
+    ctx.beginPath();
+    ctx.moveTo(pad.left, pad.top + plotH);
+    for (let i = 0; i < values.length; i++) {
+        const x = pad.left + (i / (values.length - 1)) * plotW;
+        const y = pad.top + plotH - ((values[i] - minVal) / range) * plotH;
+        ctx.lineTo(x, y);
+    }
+    ctx.lineTo(pad.left + plotW, pad.top + plotH);
+    ctx.closePath();
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+
+    // Draw line
+    ctx.beginPath();
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    for (let i = 0; i < values.length; i++) {
+        const x = pad.left + (i / (values.length - 1)) * plotW;
+        const y = pad.top + plotH - ((values[i] - minVal) / range) * plotH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // End value label
+    const endX = pad.left + plotW;
+    const endY = pad.top + plotH - ((finalVal - minVal) / range) * plotH;
+    ctx.fillStyle = lineColor;
+    ctx.font = 'bold 12px JetBrains Mono, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('$' + finalVal.toLocaleString(undefined, {maximumFractionDigits: 0}), endX + 6, endY + 4);
+
+    // Title
+    const retPct = ((finalVal - startVal) / startVal * 100).toFixed(1);
+    const sign = retPct >= 0 ? '+' : '';
+    ctx.fillStyle = '#a0a0b0';
+    ctx.font = '12px Inter, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('Equity Curve', pad.left, pad.top - 6);
+
+    ctx.fillStyle = lineColor;
+    ctx.font = 'bold 12px JetBrains Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${sign}${retPct}%`, w - pad.right, pad.top - 6);
 }
 
 // Fetch enhanced metrics from paper_strategy_metrics table

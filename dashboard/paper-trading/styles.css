@@ -463,6 +463,71 @@ body {
     animation: pulse 2s ease-in-out infinite;
 }
 
+/* Backtest Detail Panel */
+.backtests-section {
+    margin-bottom: 32px;
+}
+
+.bt-detail-row td {
+    padding: 0 !important;
+    background: var(--bg-secondary);
+}
+
+.bt-detail-panel {
+    padding: 16px 20px 20px;
+}
+
+.bt-detail-metrics {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.bt-metric {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.bt-metric-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.bt-metric-val {
+    font-size: 14px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+}
+
+.bt-chart-container {
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+}
+
+.bt-chart-container canvas {
+    display: block;
+    width: 100%;
+}
+
+/* Analytics Section */
+.analytics-section {
+    margin-bottom: 32px;
+}
+
+.analytics-section h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--text-secondary);
+}
+
 /* Footer */
 .footer {
     text-align: center;
