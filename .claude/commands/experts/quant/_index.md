@@ -21,6 +21,7 @@ This expert helps you:
 | `/experts:quant:analyze` | Analyze strategy performance and compare |
 | `/experts:quant:build-strategy` | Create a new Alpha strategy for backtesting |
 | `/experts:quant:question` | Ask questions about the quant system |
+| `/experts:quant:self-improve` | Audit codebase and update expertise docs to match reality |
 | `/experts:quant:expertise` | Full mental model for the quant system |
 
 ## Architecture

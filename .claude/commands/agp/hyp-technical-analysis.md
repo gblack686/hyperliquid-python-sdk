@@ -1,15 +1,15 @@
 ---
-model: opus
+model: sonnet
 description: Full technical analysis with all indicators, multi-timeframe confluence, and trade signals
 argument-hint: "<ticker> [timeframe] - e.g., BTC 4h"
-allowed-tools: Bash(date:*), Bash(mkdir:*), Bash(python:*), Task, Write, Read
+allowed-tools: Bash(date:*), Bash(mkdir:*), Bash(python:*), Task, Write, Read, Skill
 ---
 
 # Technical Analysis
 
 ## Purpose
 
-Orchestrate complete technical analysis by chaining all indicator agents into a comprehensive multi-timeframe analysis with confluence-based trade signals and entry/exit recommendations.
+Orchestrate complete technical analysis by running all indicator agents IN PARALLEL, then synthesizing into a confluence-based trade signal.
 
 ## Variables
 
@@ -21,10 +21,9 @@ Orchestrate complete technical analysis by chaining all indicator agents into a 
 ## Instructions
 
 - Validate ticker exists on Hyperliquid
-- Run all indicator agents to collect comprehensive data
-- Calculate confluence score from multiple indicators
+- Run ALL indicator agents in PARALLEL (not sequentially)
+- Calculate confluence score from combined results
 - Generate actionable trade setup with entry, stop, and targets
-- Report progress after each step completes
 
 ## Workflow
 
@@ -37,96 +36,34 @@ Orchestrate complete technical analysis by chaining all indicator agents into a 
    ```
 3. Validate ticker exists using `/hyp-prices {TICKER}`
 
-### Agent Chain
+### Step 1: PARALLEL Indicator Fetch
 
-#### Step 1: Price Context Agent
+Launch ALL of these as parallel Task agents (model: haiku) simultaneously in a SINGLE message with multiple Task tool calls:
 
-Invoke: `/hyp-prices {TICKER}`
+| Agent | Invoke | Output |
+|-------|--------|--------|
+| Support/Resistance | `/hyp-levels {TICKER} {TIMEFRAME}` | Key S/R levels |
+| EMA Trend | `/hyp-ema {TICKER} {TIMEFRAME}` | EMA values, crossover, trend |
+| RSI Momentum | `/hyp-rsi {TICKER} {TIMEFRAME}` | RSI value, divergences, zone |
+| MACD Momentum | `/hyp-macd {TICKER} {TIMEFRAME}` | MACD line, signal, histogram |
+| Stochastic | `/hyp-stochastic {TICKER} {TIMEFRAME}` | %K, %D, crossover |
+| Bollinger Bands | `/hyp-bollinger {TICKER} {TIMEFRAME}` | Bands, squeeze, %B |
+| ATR Volatility | `/hyp-atr {TICKER} {TIMEFRAME}` | ATR value, suggested stops |
+| Volume | `/hyp-volume {TICKER} {TIMEFRAME}` | Trend, spikes, confirmation |
 
-- **Purpose**: Get current price and 24h context
-- **Output**: Current price, 24h change, volume
-- **Save to**: `OUTPUT_DIR/price_context.md`
+IMPORTANT: These 8 agents are INDEPENDENT. Launch them ALL at once using parallel Task tool calls. Do NOT wait for one to finish before starting the next.
 
-#### Step 2: Support/Resistance Agent
+### Step 2: Confluence Scoring
 
-Invoke: `/hyp-levels {TICKER} {TIMEFRAME}`
-
-- **Purpose**: Identify key price levels
-- **Output**: Support levels, resistance levels, price position
-- **Save to**: `OUTPUT_DIR/indicators/levels.md`
-
-#### Step 3: Trend Analysis Agent (EMA)
-
-Invoke: `/hyp-ema {TICKER} {TIMEFRAME}`
-
-- **Purpose**: Determine trend direction and strength
-- **Output**: EMA values, crossover status, trend direction
-- **Save to**: `OUTPUT_DIR/indicators/ema.md`
-
-#### Step 4: Momentum Agent (RSI)
-
-Invoke: `/hyp-rsi {TICKER} {TIMEFRAME}`
-
-- **Purpose**: Measure momentum and overbought/oversold
-- **Output**: RSI value, divergences, zone
-- **Save to**: `OUTPUT_DIR/indicators/rsi.md`
-
-#### Step 5: Momentum Agent (MACD)
-
-Invoke: `/hyp-macd {TICKER} {TIMEFRAME}`
-
-- **Purpose**: Confirm momentum and crossovers
-- **Output**: MACD line, signal line, histogram, crossover
-- **Save to**: `OUTPUT_DIR/indicators/macd.md`
-
-#### Step 6: Momentum Agent (Stochastic)
-
-Invoke: `/hyp-stochastic {TICKER} {TIMEFRAME}`
-
-- **Purpose**: Additional momentum confirmation
-- **Output**: %K, %D, crossover, zone
-- **Save to**: `OUTPUT_DIR/indicators/stochastic.md`
-
-#### Step 7: Volatility Agent (Bollinger)
-
-Invoke: `/hyp-bollinger {TICKER} {TIMEFRAME}`
-
-- **Purpose**: Measure volatility and price position
-- **Output**: Bands, squeeze status, %B
-- **Save to**: `OUTPUT_DIR/indicators/bollinger.md`
-
-#### Step 8: Volatility Agent (ATR)
-
-Invoke: `/hyp-atr {TICKER} {TIMEFRAME}`
-
-- **Purpose**: Calculate stop loss distances
-- **Output**: ATR value, suggested stops
-- **Save to**: `OUTPUT_DIR/indicators/atr.md`
-
-#### Step 9: Volume Agent
-
-Invoke: `/hyp-volume {TICKER} {TIMEFRAME}`
-
-- **Purpose**: Confirm moves with volume
-- **Output**: Volume trend, spike ratio, volume-price relationship
-- **Save to**: `OUTPUT_DIR/indicators/volume.md`
-
-#### Step 10: Confluence Calculator Agent
-
-Use Task agent to calculate confluence score:
+Once all 8 agents return, calculate confluence score:
 
 ```
-Confluence Scoring System:
-
 BULLISH SIGNALS (+1 each):
 - Price above EMA 20 AND EMA 50
 - EMA 20 > EMA 50 (bullish trend)
-- RSI between 40-60 and rising
-- RSI oversold (<30) bouncing
-- MACD above signal line
-- MACD histogram positive and growing
-- Stochastic %K > %D
-- Stochastic oversold crossover
+- RSI between 40-60 and rising, OR oversold (<30) bouncing
+- MACD above signal line, histogram positive
+- Stochastic %K > %D, OR oversold crossover
 - Price near support level
 - Volume confirming (up move + high volume)
 - Bollinger %B < 0.2 (near lower band)
@@ -134,83 +71,25 @@ BULLISH SIGNALS (+1 each):
 BEARISH SIGNALS (-1 each):
 - Price below EMA 20 AND EMA 50
 - EMA 20 < EMA 50 (bearish trend)
-- RSI between 40-60 and falling
-- RSI overbought (>70) rolling over
-- MACD below signal line
-- MACD histogram negative and growing
-- Stochastic %K < %D
-- Stochastic overbought crossover
+- RSI between 40-60 and falling, OR overbought (>70) rolling
+- MACD below signal line, histogram negative
+- Stochastic %K < %D, OR overbought crossover
 - Price near resistance level
 - Volume confirming (down move + high volume)
 - Bollinger %B > 0.8 (near upper band)
 
-CONFLUENCE SCORE:
-- Strong Bullish: >= +6
-- Bullish: +3 to +5
-- Neutral: -2 to +2
-- Bearish: -3 to -5
-- Strong Bearish: <= -6
+SCORE: Strong Bullish >=+6 | Bullish +3..+5 | Neutral -2..+2 | Bearish -3..-5 | Strong Bearish <=-6
 ```
 
-- **Save to**: `OUTPUT_DIR/confluence/score.md`
+### Step 3: Trade Setup
 
-#### Step 11: Multi-Timeframe Agent
-
-Use Task agent to run quick analysis on multiple timeframes:
+Generate specific trade setup based on confluence:
 
 ```
-Run indicators on:
-- 15m (scalping view)
-- 1h (intraday view)
-- 4h (swing view)
-- 1d (position view)
-
-Determine timeframe alignment:
-- All bullish = STRONG CONFLUENCE
-- Mixed = CAUTION
-- All bearish = STRONG BEARISH CONFLUENCE
+IF Bullish: LONG with entry at support, stop at support - 1.5*ATR, targets at resistance levels
+IF Bearish: SHORT with entry at resistance, stop at resistance + 1.5*ATR, targets at support levels
+IF Neutral: NO TRADE - list watch levels and triggers
 ```
-
-- **Save to**: `OUTPUT_DIR/confluence/multi_tf.md`
-
-#### Step 12: Trade Setup Generator Agent
-
-Use Task agent to generate specific trade setup:
-
-```
-Generate Trade Setup:
-
-IF Bullish Confluence:
-  LONG SETUP:
-  - Entry Zone: [support level] to [current price]
-  - Stop Loss: [support - 1.5*ATR]
-  - Target 1: [nearest resistance] (1:1 R:R minimum)
-  - Target 2: [next resistance] (2:1 R:R)
-  - Target 3: [major resistance] (3:1 R:R)
-  - Position Size: 1-2% risk
-  - Confidence: [based on confluence score]
-
-IF Bearish Confluence:
-  SHORT SETUP:
-  - Entry Zone: [resistance level] to [current price]
-  - Stop Loss: [resistance + 1.5*ATR]
-  - Target 1: [nearest support]
-  - Target 2: [next support]
-  - Target 3: [major support]
-  - Position Size: 1-2% risk
-  - Confidence: [based on confluence score]
-
-IF Neutral:
-  NO TRADE - Wait for better setup
-  - Watch levels: [key levels to watch]
-  - Triggers: [what would change the bias]
-```
-
-- **Save to**: `OUTPUT_DIR/signals/trade_setup.md`
-
-#### Step 13: Report Generation
-
-Compile comprehensive analysis report:
 
 - **Save to**: `OUTPUT_DIR/analysis_report.md`
 
@@ -219,11 +98,6 @@ Compile comprehensive analysis report:
 ```markdown
 ## Technical Analysis: {TICKER}
 ### Generated: {TIMESTAMP}
-
-### Price Context
-- Current Price: $XX,XXX.XX
-- 24h Change: +/-X.XX%
-- Position: [Above/Below key levels]
 
 ### Indicator Summary
 | Indicator | Value | Signal | Weight |
@@ -236,16 +110,7 @@ Compile comprehensive analysis report:
 | Volume | X.Xx avg | [Confirm/Diverge] | +/-1 |
 | S/R | Near [S/R] | [Bounce/Break] | +/-1 |
 
-### Confluence Score
-**{SCORE}/12** - {INTERPRETATION}
-
-### Multi-Timeframe Alignment
-| TF | Trend | Momentum | Volume |
-|----|-------|----------|--------|
-| 15m | [Bull/Bear] | [OB/OS/N] | [H/L] |
-| 1h | [Bull/Bear] | [OB/OS/N] | [H/L] |
-| 4h | [Bull/Bear] | [OB/OS/N] | [H/L] |
-| 1d | [Bull/Bear] | [OB/OS/N] | [H/L] |
+### Confluence Score: {SCORE}/12 - {INTERPRETATION}
 
 ### Trade Setup
 **Direction**: {LONG/SHORT/NO TRADE}
@@ -258,32 +123,12 @@ Compile comprehensive analysis report:
 | Target 1 | $XX,XXX | X.XX% (1:1) |
 | Target 2 | $XX,XXX | X.XX% (2:1) |
 | Target 3 | $XX,XXX | X.XX% (3:1) |
-
-### Risk Management
-- Position Size: X% of equity
-- Risk Amount: $XXX
-- Reward Potential: $XXX - $XXX
-
-### Key Levels to Watch
-- Resistance: $XX,XXX, $XX,XXX
-- Support: $XX,XXX, $XX,XXX
-
-### Output Files
-- Full Report: OUTPUT_DIR/analysis_report.md
-- Indicators: OUTPUT_DIR/indicators/
-- Confluence: OUTPUT_DIR/confluence/
-- Trade Setup: OUTPUT_DIR/signals/trade_setup.md
 ```
 
 ## Examples
 
 ```bash
-# Full technical analysis for BTC on 1h
 /hyp-technical-analysis BTC
-
-# Technical analysis for ETH on 4h
 /hyp-technical-analysis ETH 4h
-
-# Technical analysis for SOL on 15m (scalping)
 /hyp-technical-analysis SOL 15m
 ```

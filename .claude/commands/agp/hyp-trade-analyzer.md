@@ -2,14 +2,14 @@
 model: sonnet
 description: Analyze recent trades for patterns, edge metrics, and improvement areas
 argument-hint: "[count] - number of recent trades (default 50)"
-allowed-tools: Bash(date:*), Bash(mkdir:*), Bash(python:*), Task, Write, Read
+allowed-tools: Bash(date:*), Bash(mkdir:*), Bash(python:*), Task, Write, Read, Skill
 ---
 
 # Trade Analyzer
 
 ## Purpose
 
-Analyze recent trade history to identify patterns, calculate edge metrics, and suggest concrete improvements to trading performance.
+Analyze recent trade history to identify patterns, calculate edge metrics, and suggest improvements. Fetches history ONCE then does all analysis in a SINGLE combined pass.
 
 ## Variables
 
@@ -19,210 +19,67 @@ Analyze recent trade history to identify patterns, calculate edge metrics, and s
 
 ## Instructions
 
-- Fetch trade history first
-- Run analysis agents sequentially, each building on previous results
-- Generate quantitative metrics with statistical significance
-- Provide actionable improvement suggestions
+- Fetch trade history ONCE
+- Run ALL analysis in ONE combined Task (not 5 separate Tasks)
+- Generate quantitative metrics with actionable improvements
 
 ## Workflow
 
 ### Step 0: Setup
 
 1. Get timestamp: `date +"%Y-%m-%d_%H-%M-%S"`
-2. Create output structure:
+2. Create output:
    ```bash
-   mkdir -p OUTPUT_DIR/{metrics,patterns,charts}
+   mkdir -p OUTPUT_DIR/{metrics,patterns}
    ```
 
-### Agent Chain
-
-#### Step 1: Trade History Agent
+### Step 1: Fetch Trade History
 
 Invoke: `/hyp-history`
 
-- **Purpose**: Fetch last {TRADE_COUNT} completed trades
-- **Output**: Trade records with entry/exit prices, sizes, timestamps, PnL
-- **Save to**: `OUTPUT_DIR/raw_trades.md`
+Get last {TRADE_COUNT} completed trades with entry/exit prices, sizes, timestamps, PnL.
 
-#### Step 2: Win Rate Calculator Agent
+### Step 2: COMBINED Analysis (Single Task)
 
-Use Task agent to calculate win/loss statistics:
+Use ONE Task agent (model: sonnet) to perform ALL of the following on the fetched data:
 
-```
-Calculate:
-1. Overall Statistics
-   - Total trades: N
-   - Winners: N (XX%)
-   - Losers: N (XX%)
-   - Breakeven: N (XX%)
+**A. Win/Loss Statistics**:
+- Overall: total trades, winners, losers, breakeven
+- By ticker: trades, win rate, avg win, avg loss, expectancy
+- By side: long vs short win rate and avg PnL
+- Risk-reward: avg winner/loser sizes, profit factor, actual R:R
 
-2. By Ticker
-   | Ticker | Trades | Win Rate | Avg Win | Avg Loss | Expectancy |
-   |--------|--------|----------|---------|----------|------------|
+**B. Pattern Recognition**:
+- Time-based: best/worst hour of day, day of week, session (Asia/Europe/US)
+- Streaks: longest win/loss streak, current streak, recovery rate
+- Size patterns: win rate by position size quartile, optimal size range
+- Duration: avg winning vs losing trade duration, optimal hold time
+- Sequence: win-after-win/loss probability, tilt detection
 
-3. By Side
-   - Long win rate: XX%
-   - Short win rate: XX%
-   - Long avg PnL: $XX
-   - Short avg PnL: $XX
+**C. Edge Metrics**:
+- Expected value per trade and per dollar risked
+- Sharpe, Sortino, Calmar ratio estimates
+- Max drawdown (absolute and %), avg drawdown, recovery time
+- Consistency: % profitable days/weeks, variance
+- Edge decay: recent 10 trades vs overall trend
 
-4. Risk-Reward Achieved
-   - Average winner size: $XX
-   - Average loser size: $XX
-   - Actual R:R ratio: X.XX
-   - Profit factor: X.XX
-```
+**D. Ticker Performance**:
+- Per-ticker table: trades, win%, total PnL, avg PnL, best/worst
+- Focus list (best expectancy) and avoid list (worst)
 
-- **Save to**: `OUTPUT_DIR/metrics/win_rate.md`
+**E. Improvement Suggestions** (top 3 highest-impact):
+- Position sizing: Kelly criterion suggestion
+- Entry timing: best times and times to avoid
+- Risk management: stop/target adjustments, daily loss rules
+- Psychological: tilt patterns, discipline checkpoints
 
-#### Step 3: Pattern Recognition Agent
-
-Use Task agent to identify trading patterns:
-
-```
-Analyze Patterns:
-1. Time-Based Patterns
-   - Best performing hour of day (UTC)
-   - Best performing day of week
-   - Worst performing times
-   - Session analysis (Asia/Europe/US)
-
-2. Streak Analysis
-   - Longest winning streak: N trades
-   - Longest losing streak: N trades
-   - Current streak: N [wins/losses]
-   - Recovery rate after losses
-
-3. Size Patterns
-   - Win rate by position size quartile
-   - PnL correlation with size
-   - Optimal position size range
-
-4. Duration Patterns
-   - Average winning trade duration
-   - Average losing trade duration
-   - Optimal hold time analysis
-
-5. Sequence Patterns
-   - Win after win probability
-   - Win after loss probability
-   - Tilt detection (losses after losses)
-```
-
-- **Save to**: `OUTPUT_DIR/patterns/analysis.md`
-
-#### Step 4: Edge Calculator Agent
-
-Use Task agent to calculate edge metrics:
-
-```
-Calculate Edge Metrics:
-1. Expected Value
-   - EV per trade: $XX.XX
-   - EV per dollar risked: $X.XX
-   - Statistical significance: p = X.XX
-
-2. Risk-Adjusted Returns
-   - Sharpe ratio (annualized estimate)
-   - Sortino ratio
-   - Calmar ratio
-
-3. Drawdown Analysis
-   - Maximum drawdown: $XX (XX%)
-   - Average drawdown: $XX
-   - Drawdown duration (avg trades to recover)
-   - Current drawdown status
-
-4. Consistency Metrics
-   - % of profitable days
-   - % of profitable weeks
-   - Variance of daily returns
-   - Consistency score (0-100)
-
-5. Edge Decay Analysis
-   - Performance trend (improving/declining)
-   - Recent 10 trades vs overall
-   - Edge sustainability assessment
-```
-
-- **Save to**: `OUTPUT_DIR/metrics/edge.md`
-
-#### Step 5: Ticker Performance Agent
-
-Use Task agent to analyze per-ticker performance:
-
-```
-Per-Ticker Analysis:
-| Ticker | Trades | Win% | Total PnL | Avg PnL | Best Trade | Worst Trade |
-|--------|--------|------|-----------|---------|------------|-------------|
-
-Identify:
-1. Best performing tickers (by expectancy)
-2. Worst performing tickers
-3. Most traded tickers
-4. Suggested focus list
-5. Suggested avoid list
-```
-
-- **Save to**: `OUTPUT_DIR/metrics/ticker_performance.md`
-
-#### Step 6: Improvement Suggestions Agent
-
-Use Task agent to generate actionable improvements:
-
-```
-Generate Recommendations:
-
-1. Position Sizing Adjustments
-   Based on: Win rate, average win/loss, Kelly criterion
-   - Current approach assessment
-   - Optimal sizing suggestion
-   - Risk per trade recommendation
-
-2. Entry Timing Improvements
-   Based on: Time patterns, win rate by session
-   - Best times to trade
-   - Times to avoid
-   - Session focus recommendation
-
-3. Ticker Selection Optimization
-   Based on: Per-ticker performance
-   - Tickers to focus on
-   - Tickers to avoid
-   - New tickers to consider
-
-4. Risk Management Tweaks
-   Based on: Drawdown analysis, streak patterns
-   - Stop loss recommendations
-   - Take profit recommendations
-   - Max daily loss rules
-
-5. Psychological Insights
-   Based on: Streak analysis, tilt detection
-   - Tilt patterns identified
-   - Recovery suggestions
-   - Discipline checkpoints
-
-Prioritize top 3 highest-impact improvements.
-```
-
-- **Save to**: `OUTPUT_DIR/improvements.md`
-
-#### Step 7: Summary Report
-
-Compile comprehensive analysis report:
-
-- **Save to**: `OUTPUT_DIR/report.md`
+Save to `OUTPUT_DIR/report.md`
 
 ## Report
 
 ```markdown
 ## Trade Analysis: {TIMESTAMP}
-
-### Overview
-- Trades Analyzed: {TRADE_COUNT}
-- Period: [first trade date] to [last trade date]
-- Net PnL: $X,XXX.XX
+### Trades Analyzed: {TRADE_COUNT} | Period: {first} to {last}
 
 ### Key Metrics
 | Metric | Value | Assessment |
@@ -233,33 +90,25 @@ Compile comprehensive analysis report:
 | Max Drawdown | XX% | [GOOD/FAIR/POOR] |
 | Sharpe Ratio | X.XX | [GOOD/FAIR/POOR] |
 
-### Top Patterns Identified
-1. [Pattern 1 with actionable insight]
-2. [Pattern 2 with actionable insight]
-3. [Pattern 3 with actionable insight]
+### By Ticker
+| Ticker | Trades | Win% | Total PnL | Avg PnL | Verdict |
+|--------|--------|------|-----------|---------|---------|
+
+### Top Patterns
+1. {Pattern with actionable insight}
+2. {Pattern with actionable insight}
+3. {Pattern with actionable insight}
 
 ### Priority Improvements
-1. **[Improvement 1]**: [Specific action]
-2. **[Improvement 2]**: [Specific action]
-3. **[Improvement 3]**: [Specific action]
-
-### Output Files
-- Full Report: OUTPUT_DIR/report.md
-- Win Rate Analysis: OUTPUT_DIR/metrics/win_rate.md
-- Pattern Analysis: OUTPUT_DIR/patterns/analysis.md
-- Edge Metrics: OUTPUT_DIR/metrics/edge.md
-- Improvements: OUTPUT_DIR/improvements.md
+1. **{Improvement}**: {Specific action}
+2. **{Improvement}**: {Specific action}
+3. **{Improvement}**: {Specific action}
 ```
 
 ## Examples
 
 ```bash
-# Analyze last 50 trades (default)
 /hyp-trade-analyzer
-
-# Analyze last 100 trades
 /hyp-trade-analyzer 100
-
-# Analyze last 20 trades (quick check)
 /hyp-trade-analyzer 20
 ```
