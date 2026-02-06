@@ -45,6 +45,9 @@ from scripts.paper_trading.strategies import (
     DirectionalStrategy,
 )
 
+# Strategy auto-tuner
+from scripts.paper_trading.strategy_tuner import StrategyTuner
+
 # QuantPyLib integration (optional upgrade)
 try:
     from integrations.quantpylib.data_pipeline import HyperliquidDataPipeline
@@ -139,6 +142,9 @@ class PaperTradingScheduler:
         self.metrics_calculator = MetricsCalculator()
         self.telegram = TelegramAlerts() if self.enable_telegram else None
         self.scheduler = None
+
+        # Strategy auto-tuner (evaluates daily, logs adjustments for review)
+        self.tuner = StrategyTuner(auto_apply=False)
 
         # QuantPyLib upgrades (optional)
         self.data_pipeline = None
@@ -254,6 +260,91 @@ class PaperTradingScheduler:
             logger.info("Metrics updated")
         except Exception as e:
             logger.error(f"Error updating metrics: {e}")
+
+    async def run_tuner(self):
+        """Run the strategy auto-tuner to evaluate and propose adjustments."""
+        try:
+            logger.info("Running strategy auto-tuner...")
+            adjustments = await self.tuner.evaluate_all()
+
+            if adjustments:
+                ids = await self.tuner.log_adjustments(adjustments)
+                report = self.tuner.format_report(adjustments)
+                logger.info(f"Auto-tuner proposed {len(adjustments)} adjustment(s)")
+                print(report)
+
+                # Send tuner report to Telegram
+                if self.telegram:
+                    telegram_msg = (
+                        "[TUNER] Strategy Auto-Adjustment Report\n\n"
+                        f"{len(adjustments)} parameter adjustment(s) proposed.\n"
+                        "Review on dashboard or use --tune-review flag.\n\n"
+                    )
+                    for adj in adjustments:
+                        telegram_msg += (
+                            f"  {adj.strategy_name}: {adj.parameter_name}\n"
+                            f"  {adj.old_value} -> {adj.new_value}\n"
+                            f"  {adj.reason}\n\n"
+                        )
+                    from integrations.telegram.alerts import AlertPriority
+                    await self.telegram.send(telegram_msg, AlertPriority.LOW)
+            else:
+                logger.info("Auto-tuner: No adjustments needed")
+
+            # Apply any previously approved adjustments
+            applied = await self.tuner.apply_approved()
+            if applied > 0:
+                logger.info(f"Applied {applied} previously approved adjustment(s)")
+                # Rebuild strategies with updated params
+                await self._rebuild_strategies_from_adjustments()
+
+        except Exception as e:
+            logger.error(f"Error running tuner: {e}")
+
+    async def _rebuild_strategies_from_adjustments(self):
+        """Rebuild strategy instances with the latest applied parameters."""
+        try:
+            # Get all applied adjustments
+            if not self.tuner.supabase:
+                return
+
+            result = self.tuner.supabase.table("paper_strategy_adjustments").select(
+                "*"
+            ).eq("status", "applied").execute()
+
+            applied = result.data or []
+
+            # Get effective params for each strategy
+            funding_params = self.tuner.get_effective_params("funding_arbitrage", applied)
+            grid_params = self.tuner.get_effective_params("grid_trading", applied)
+            momentum_params = self.tuner.get_effective_params("directional_momentum", applied)
+
+            # Rebuild
+            self.strategies = [
+                FundingStrategy(
+                    min_funding_rate=funding_params.get("min_funding_rate", 0.01),
+                    min_volume=funding_params.get("min_volume", 100_000),
+                    expiry_hours=int(funding_params.get("expiry_hours", 8)),
+                ),
+                GridStrategy(
+                    lookback_hours=int(grid_params.get("lookback_hours", 72)),
+                    min_range_pct=grid_params.get("min_range_pct", 3.0),
+                    max_range_pct=grid_params.get("max_range_pct", 15.0),
+                    entry_threshold_pct=grid_params.get("entry_threshold_pct", 20),
+                    min_volume=grid_params.get("min_volume", 500_000),
+                    expiry_hours=int(grid_params.get("expiry_hours", 24)),
+                ),
+                DirectionalStrategy(
+                    min_change_pct=momentum_params.get("min_change_pct", 3.0),
+                    min_volume=momentum_params.get("min_volume", 500_000),
+                    min_score=int(momentum_params.get("min_score", 50)),
+                    expiry_hours=int(momentum_params.get("expiry_hours", 24)),
+                ),
+            ]
+            logger.info("Strategies rebuilt with applied tuner adjustments")
+
+        except Exception as e:
+            logger.error(f"Error rebuilding strategies: {e}")
 
     async def _get_current_prices(self) -> Dict[str, float]:
         """Get current prices for all symbols"""
@@ -385,12 +476,24 @@ class PaperTradingScheduler:
             replace_existing=True,
         )
 
+        # Schedule auto-tuner daily at 01:00 UTC (after review)
+        self.scheduler.add_job(
+            self.run_tuner,
+            "cron",
+            hour=1,
+            minute=0,
+            id="auto_tuner",
+            name="Strategy auto-tuner",
+            replace_existing=True,
+        )
+
         self.scheduler.start()
         logger.info("Paper trading scheduler started")
         logger.info(f"  - Signals: every {self.signal_interval} minutes")
         logger.info(f"  - Outcomes: every {self.outcome_check_interval} minutes")
         logger.info(f"  - Metrics: every {self.metrics_interval} minutes")
         logger.info(f"  - Daily review: 00:00 UTC")
+        logger.info(f"  - Auto-tuner: 01:00 UTC")
 
     def stop(self):
         """Stop the scheduler"""
@@ -405,6 +508,8 @@ async def main():
     parser.add_argument("--once", action="store_true", help="Run once and exit")
     parser.add_argument("--status", action="store_true", help="Show status and exit")
     parser.add_argument("--review", action="store_true", help="Generate 24h review and exit")
+    parser.add_argument("--tune", action="store_true", help="Run auto-tuner once and exit")
+    parser.add_argument("--tune-review", action="store_true", help="Show pending tuner adjustments")
     parser.add_argument("--no-telegram", action="store_true", help="Disable Telegram alerts")
     args = parser.parse_args()
 
@@ -425,6 +530,33 @@ async def main():
     if args.review:
         report = await scheduler.generate_review()
         print("\n" + report)
+        return
+
+    if args.tune:
+        print("\nRunning strategy auto-tuner...")
+        await scheduler.run_tuner()
+        print("\nDone!")
+        return
+
+    if args.tune_review:
+        pending = await scheduler.tuner.get_pending_adjustments()
+        print("\n=== PENDING TUNER ADJUSTMENTS ===")
+        if not pending:
+            print("No pending adjustments.")
+        else:
+            print(f"{len(pending)} pending adjustment(s):\n")
+            for adj in pending:
+                print(f"  [{adj['id'][:8]}] {adj['strategy_name']}.{adj['parameter_name']}")
+                print(f"    {adj['old_value']} -> {adj['new_value']}")
+                print(f"    Reason: {adj['reason']}")
+                ctx_parts = []
+                if adj.get('win_rate_7d') is not None:
+                    ctx_parts.append(f"WR: {adj['win_rate_7d']:.0%}")
+                if adj.get('avg_pnl_pct_7d') is not None:
+                    ctx_parts.append(f"Avg P&L: {adj['avg_pnl_pct_7d']:+.2f}%")
+                if ctx_parts:
+                    print(f"    Context: {' | '.join(ctx_parts)}")
+                print()
         return
 
     if args.once:

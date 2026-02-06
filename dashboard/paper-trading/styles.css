@@ -516,6 +516,65 @@ body {
     width: 100%;
 }
 
+/* Adjustments Section */
+.adjustments-section {
+    margin-bottom: 32px;
+}
+
+.adj-row-pending {
+    background: rgba(251, 191, 36, 0.04);
+}
+
+.adj-change {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.adj-reason {
+    font-size: 12px;
+    color: var(--text-secondary);
+    max-width: 280px;
+}
+
+.adj-context {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.adj-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-radius: var(--radius-sm);
+}
+
+.adj-pending {
+    background: var(--accent-yellow-dim);
+    color: var(--accent-yellow);
+}
+
+.adj-approved {
+    background: var(--accent-blue-dim);
+    color: var(--accent-blue);
+}
+
+.adj-applied {
+    background: var(--accent-green-dim);
+    color: var(--accent-green);
+}
+
+.adj-reverted {
+    background: var(--accent-red-dim);
+    color: var(--accent-red);
+}
+
 /* Analytics Section */
 .analytics-section {
     margin-bottom: 32px;

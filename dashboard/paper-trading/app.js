@@ -520,6 +520,86 @@ function drawEquityCurve(canvas, backtest) {
     ctx.fillText(`${sign}${retPct}%`, w - pad.right, pad.top - 6);
 }
 
+// Fetch strategy adjustments from paper_strategy_adjustments table
+async function fetchAdjustments() {
+    try {
+        return await supabaseQuery('paper_strategy_adjustments', {
+            'select': '*',
+            'order': 'created_at.desc',
+            'limit': '20'
+        });
+    } catch (e) {
+        console.warn('Adjustments not available:', e);
+        return [];
+    }
+}
+
+// Render adjustment history table
+function renderAdjustments(adjustments) {
+    const tbody = document.getElementById('adjustments-tbody');
+    const countEl = document.getElementById('adjustments-count');
+    if (!tbody || !countEl) return;
+
+    const pending = adjustments.filter(a => a.status === 'pending').length;
+    countEl.textContent = pending > 0 ? `${pending} pending` : adjustments.length;
+
+    if (adjustments.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="loading">No adjustments yet - tuner evaluates strategies daily</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = adjustments.map(adj => {
+        const createdAt = new Date(adj.created_at);
+
+        // Format parameter change
+        let oldFmt, newFmt;
+        if (adj.parameter_name === 'min_volume') {
+            oldFmt = '$' + (adj.old_value || 0).toLocaleString();
+            newFmt = '$' + (adj.new_value || 0).toLocaleString();
+        } else if (['expiry_hours', 'lookback_hours', 'min_score', 'entry_threshold_pct'].includes(adj.parameter_name)) {
+            oldFmt = (adj.old_value || 0).toFixed(0);
+            newFmt = (adj.new_value || 0).toFixed(0);
+        } else {
+            oldFmt = (adj.old_value || 0).toFixed(4);
+            newFmt = (adj.new_value || 0).toFixed(4);
+        }
+
+        const isIncrease = adj.new_value > adj.old_value;
+        const arrow = isIncrease ? '&uarr;' : '&darr;';
+        const changeClass = isIncrease ? 'positive' : 'negative';
+
+        // Status styling
+        const statusMap = {
+            'pending': '<span class="adj-status adj-pending">PENDING</span>',
+            'approved': '<span class="adj-status adj-approved">APPROVED</span>',
+            'applied': '<span class="adj-status adj-applied">APPLIED</span>',
+            'reverted': '<span class="adj-status adj-reverted">REVERTED</span>',
+        };
+        const statusHtml = statusMap[adj.status] || adj.status;
+
+        // 7d context
+        const wr = adj.win_rate_7d != null ? (adj.win_rate_7d * 100).toFixed(0) + '%' : '--';
+        const pnl = adj.avg_pnl_pct_7d != null ? (adj.avg_pnl_pct_7d >= 0 ? '+' : '') + adj.avg_pnl_pct_7d.toFixed(2) + '%' : '--';
+        const sigs = adj.total_signals_7d != null ? adj.total_signals_7d : '--';
+
+        return `
+            <tr class="adj-row adj-row-${adj.status}">
+                <td>${timeAgo(createdAt)}</td>
+                <td><span class="strategy-tag">${adj.strategy_name}</span></td>
+                <td><code>${adj.parameter_name}</code></td>
+                <td>
+                    <span class="adj-change">
+                        ${oldFmt} <span class="pnl ${changeClass}">${arrow} ${newFmt}</span>
+                    </span>
+                </td>
+                <td class="adj-reason">${adj.reason || '--'}</td>
+                <td><span class="adj-context">WR ${wr} | P&L ${pnl} | ${sigs} sigs</span></td>
+                <td>${statusHtml}</td>
+            </tr>
+        `;
+    }).join('');
+}
+
 // Fetch enhanced metrics from paper_strategy_metrics table
 async function fetchEnhancedMetrics() {
     try {
@@ -632,12 +712,13 @@ async function refreshDashboard() {
         console.log('Refreshing dashboard...');
 
         // Fetch all data in parallel
-        const [activeSignals, recentRecs, recentOutcomes, enhancedMetrics, backtestResults] = await Promise.all([
+        const [activeSignals, recentRecs, recentOutcomes, enhancedMetrics, backtestResults, adjustments] = await Promise.all([
             fetchActiveSignals(),
             fetchRecentRecommendations(),
             fetchRecentOutcomes(),
             fetchEnhancedMetrics(),
-            fetchBacktestResults()
+            fetchBacktestResults(),
+            fetchAdjustments()
         ]);
 
         console.log('Data fetched:', {
@@ -645,7 +726,8 @@ async function refreshDashboard() {
             recent: recentRecs.length,
             outcomes: recentOutcomes.length,
             enhanced: enhancedMetrics.length,
-            backtests: backtestResults.length
+            backtests: backtestResults.length,
+            adjustments: adjustments.length
         });
 
         // Update all sections
@@ -655,6 +737,7 @@ async function refreshDashboard() {
         renderOutcomes(recentOutcomes);
         updateEnhancedAnalytics(enhancedMetrics);
         renderBacktestResults(backtestResults);
+        renderAdjustments(adjustments);
         updateTimestamp();
 
         // Update status indicator

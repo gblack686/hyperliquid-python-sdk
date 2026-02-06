@@ -361,11 +361,16 @@ class HyperliquidDataPipeline:
 
             df = pd.DataFrame(candles)
 
-            # Native SDK returns different column names
+            # Drop non-OHLCV columns to avoid conflicts
+            # t = open time, T = close time, s = symbol, i = interval, n = num trades
+            drop_cols = [c for c in ["T", "s", "i", "n"] if c in df.columns]
+            if drop_cols:
+                df = df.drop(columns=drop_cols)
+
+            # Rename OHLCV + timestamp columns
             rename_map = {}
             for old, new in [("o", "open"), ("h", "high"), ("l", "low"),
-                             ("c", "close"), ("v", "volume"), ("T", "timestamp"),
-                             ("t", "timestamp")]:
+                             ("c", "close"), ("v", "volume"), ("t", "timestamp")]:
                 if old in df.columns:
                     rename_map[old] = new
             df = df.rename(columns=rename_map)
