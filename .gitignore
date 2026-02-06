@@ -643,6 +643,9 @@ quantpylib_env/
 data/
 **/__pycache__/
 
+# Adaptive trail manager state
+adaptive_trail_state.json
+
 # Backtest results (keep in logs/)
 backtest_results*.png
 backtest_results*.json
@@ -671,3 +674,10 @@ projects/dashboard/data/
 projects/dashboard/logs/
 projects/mean-reversion/logs/
 projects/mean-reversion/data/
+
+# Generated outputs (charts, backtests, scans, reports)
+outputs/
+
+# Runtime temp/state files
+_pending_signal.json
+pending_trades.json

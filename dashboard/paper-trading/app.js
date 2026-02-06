@@ -706,19 +706,314 @@ function updateEnhancedAnalytics(metrics) {
     }
 }
 
+// =============================================
+// Signal Feed
+// =============================================
+
+async function fetchSignalFeed() {
+    return supabaseQuery('paper_recommendations', {
+        'select': 'created_at,strategy_name,symbol,direction,entry_price,target_price_1,stop_loss_price,confidence_score,status',
+        'order': 'created_at.desc',
+        'limit': '20'
+    });
+}
+
+function renderSignalFeed(signals) {
+    const feed = document.getElementById('signal-feed');
+    const countEl = document.getElementById('feed-count');
+    if (!feed) return;
+
+    const activeCount = signals.filter(s => s.status === 'ACTIVE').length;
+    if (countEl) countEl.textContent = activeCount > 0 ? `${activeCount} active` : signals.length;
+
+    if (signals.length === 0) {
+        feed.innerHTML = '<div class="feed-empty">No signals yet -- scheduler generates signals every 15 minutes</div>';
+        return;
+    }
+
+    feed.innerHTML = signals.map(s => {
+        const time = new Date(s.created_at);
+        const stratClass = STRATEGY_CLASSES[s.strategy_name] || '';
+        const dirClass = s.direction.toLowerCase();
+        const isActive = s.status === 'ACTIVE';
+
+        return `
+            <div class="feed-item ${isActive ? 'feed-active' : ''}">
+                <div class="feed-time">${timeAgo(time)}</div>
+                <div class="feed-content">
+                    <span class="feed-direction ${dirClass}">${s.direction}</span>
+                    <strong class="feed-symbol">${s.symbol}</strong>
+                    <span class="feed-strategy ${stratClass}">${STRATEGY_NAMES[s.strategy_name]?.split(' ')[0] || s.strategy_name}</span>
+                </div>
+                <div class="feed-price">@ ${formatPrice(s.entry_price)}</div>
+                <div class="feed-confidence">
+                    <div class="feed-conf-bar"><div class="feed-conf-fill" style="width:${s.confidence_score}%"></div></div>
+                    <span>${s.confidence_score}</span>
+                </div>
+                ${isActive ? '<div class="feed-status-dot"></div>' : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+// =============================================
+// P&L Equity Curve
+// =============================================
+
+let pnlCurveChart = null;
+let pnlCurveSeries = null;
+let pnlCurveTimeframe = '7d';
+
+function initPnlCurveChart() {
+    const container = document.getElementById('pnl-curve-chart');
+    if (!container || typeof LightweightCharts === 'undefined') return;
+
+    container.innerHTML = '';
+
+    pnlCurveChart = LightweightCharts.createChart(container, {
+        width: container.clientWidth,
+        height: 300,
+        layout: {
+            background: { type: 'solid', color: CHART_THEME.background },
+            textColor: CHART_THEME.text,
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 11
+        },
+        grid: {
+            vertLines: { color: CHART_THEME.grid },
+            horzLines: { color: CHART_THEME.grid }
+        },
+        rightPriceScale: {
+            borderColor: CHART_THEME.grid,
+            scaleMargins: { top: 0.1, bottom: 0.1 }
+        },
+        timeScale: {
+            borderColor: CHART_THEME.grid,
+            timeVisible: true,
+            secondsVisible: false
+        },
+        crosshair: {
+            mode: LightweightCharts.CrosshairMode.Normal,
+            vertLine: { color: CHART_THEME.crosshair, style: 0, width: 1 },
+            horzLine: { color: CHART_THEME.crosshair, style: 0, width: 1 }
+        },
+        handleScroll: { vertTouchDrag: false },
+        handleScale: { axisPressedMouseMove: true }
+    });
+
+    pnlCurveSeries = pnlCurveChart.addSeries(LightweightCharts.AreaSeries, {
+        lineColor: '#3b82f6',
+        topColor: 'rgba(59, 130, 246, 0.3)',
+        bottomColor: 'rgba(59, 130, 246, 0.02)',
+        lineWidth: 2,
+        crosshairMarkerVisible: true,
+        priceFormat: {
+            type: 'custom',
+            formatter: (price) => '$' + price.toFixed(2)
+        }
+    });
+
+    // Zero line
+    pnlCurveSeries.createPriceLine({
+        price: 0,
+        color: '#606070',
+        lineWidth: 1,
+        lineStyle: 2, // dashed
+        axisLabelVisible: true,
+        title: 'Break Even'
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+        if (pnlCurveChart) pnlCurveChart.applyOptions({ width: container.clientWidth });
+    });
+    resizeObserver.observe(container);
+}
+
+async function fetchPnlOutcomes(timeframe) {
+    const params = {
+        'select': 'outcome_time,pnl_usd,outcome_type,paper_recommendations(strategy_name,symbol)',
+        'order': 'outcome_time.asc'
+    };
+    if (timeframe !== 'all') {
+        const days = timeframe === '7d' ? 7 : 30;
+        const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+        params['outcome_time'] = `gte.${since}`;
+    }
+    return supabaseQuery('paper_recommendation_outcomes', params);
+}
+
+async function loadPnlCurveData() {
+    if (!pnlCurveSeries) return;
+
+    try {
+        const outcomes = await fetchPnlOutcomes(pnlCurveTimeframe);
+
+        if (outcomes.length === 0) {
+            pnlCurveSeries.setData([]);
+            document.getElementById('pnl-curve-total').textContent = '$0.00';
+            document.getElementById('pnl-curve-total').className = 'pnl-total-value';
+            document.getElementById('pnl-curve-trades').textContent = '0 trades';
+            document.getElementById('pnl-curve-winrate').textContent = '0% win rate';
+            document.getElementById('pnl-curve-best').textContent = 'Best: --';
+            document.getElementById('pnl-curve-worst').textContent = 'Worst: --';
+            return;
+        }
+
+        // Build cumulative P&L
+        let cumPnl = 0;
+        const data = [];
+        let wins = 0;
+        let bestTrade = -Infinity;
+        let worstTrade = Infinity;
+
+        outcomes.forEach(o => {
+            const pnl = parseFloat(o.pnl_usd || 0);
+            cumPnl += pnl;
+            const time = Math.floor(new Date(o.outcome_time).getTime() / 1000);
+            data.push({ time, value: cumPnl });
+            if (o.outcome_type === 'TARGET_HIT') wins++;
+            if (pnl > bestTrade) bestTrade = pnl;
+            if (pnl < worstTrade) worstTrade = pnl;
+        });
+
+        // Deduplicate by timestamp (keep last)
+        const deduped = [];
+        const seen = new Set();
+        for (let i = data.length - 1; i >= 0; i--) {
+            if (!seen.has(data[i].time)) {
+                seen.add(data[i].time);
+                deduped.unshift(data[i]);
+            }
+        }
+
+        // Dynamic color based on profit/loss
+        const isProfit = cumPnl >= 0;
+        pnlCurveSeries.applyOptions({
+            lineColor: isProfit ? '#00d26a' : '#ff4757',
+            topColor: isProfit ? 'rgba(0, 210, 106, 0.25)' : 'rgba(255, 71, 87, 0.25)',
+            bottomColor: isProfit ? 'rgba(0, 210, 106, 0.02)' : 'rgba(255, 71, 87, 0.02)'
+        });
+
+        pnlCurveSeries.setData(deduped);
+        pnlCurveChart.timeScale().fitContent();
+
+        // Update summary
+        const totalEl = document.getElementById('pnl-curve-total');
+        const pnlFmt = formatPnl(cumPnl);
+        totalEl.textContent = pnlFmt.formatted;
+        totalEl.className = `pnl-total-value ${pnlFmt.colorClass}`;
+
+        const winRate = outcomes.length > 0 ? (wins / outcomes.length * 100).toFixed(1) : 0;
+        document.getElementById('pnl-curve-trades').textContent = `${outcomes.length} trades`;
+        document.getElementById('pnl-curve-winrate').textContent = `${winRate}% win rate`;
+        document.getElementById('pnl-curve-best').textContent =
+            bestTrade > -Infinity ? `Best: +$${bestTrade.toFixed(2)}` : 'Best: --';
+        document.getElementById('pnl-curve-worst').textContent =
+            worstTrade < Infinity ? `Worst: -$${Math.abs(worstTrade).toFixed(2)}` : 'Worst: --';
+
+    } catch (err) {
+        console.error('Failed to load P&L curve:', err);
+    }
+}
+
+function selectPnlTimeframe(tf) {
+    pnlCurveTimeframe = tf;
+    document.querySelectorAll('.pnl-tf-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.pnltf === tf);
+    });
+    loadPnlCurveData();
+}
+
+// =============================================
+// Strategy Comparison
+// =============================================
+
+async function fetchStrategyComparison() {
+    return supabaseQuery('paper_recommendation_outcomes', {
+        'select': 'outcome_type,pnl_usd,pnl_pct,hold_duration_minutes,paper_recommendations(strategy_name,symbol)',
+        'order': 'outcome_time.desc',
+        'limit': '2000'
+    });
+}
+
+function renderStrategyComparison(outcomes) {
+    const tbody = document.getElementById('comparison-tbody');
+    if (!tbody) return;
+
+    const strategies = {
+        'funding_arbitrage': { name: 'Funding Arbitrage', icon: '$', color: 'green', signals: 0, wins: 0, pnl: 0, best: -Infinity, worst: Infinity, holdMins: [], disabled: true },
+        'grid_trading': { name: 'Grid Trading', icon: '#', color: 'blue', signals: 0, wins: 0, pnl: 0, best: -Infinity, worst: Infinity, holdMins: [], disabled: false },
+        'directional_momentum': { name: 'Directional Momentum', icon: '^', color: 'purple', signals: 0, wins: 0, pnl: 0, best: -Infinity, worst: Infinity, holdMins: [], disabled: false }
+    };
+
+    outcomes.forEach(o => {
+        const strat = o.paper_recommendations?.strategy_name;
+        if (!strat || !strategies[strat]) return;
+        const s = strategies[strat];
+        s.signals++;
+        const pnl = parseFloat(o.pnl_usd || 0);
+        s.pnl += pnl;
+        if (o.outcome_type === 'TARGET_HIT') s.wins++;
+        if (pnl > s.best) s.best = pnl;
+        if (pnl < s.worst) s.worst = pnl;
+        if (o.hold_duration_minutes) s.holdMins.push(o.hold_duration_minutes);
+    });
+
+    tbody.innerHTML = Object.entries(strategies).map(([key, s]) => {
+        const winRate = s.signals > 0 ? (s.wins / s.signals * 100).toFixed(0) : 0;
+        const avgPnl = s.signals > 0 ? s.pnl / s.signals : 0;
+        const avgHold = s.holdMins.length > 0 ? s.holdMins.reduce((a, b) => a + b, 0) / s.holdMins.length : 0;
+        const pnlFmt = formatPnl(s.pnl);
+        const avgPnlFmt = formatPnl(avgPnl);
+        const bestFmt = s.best > -Infinity ? formatPnl(s.best) : { formatted: '--', colorClass: '' };
+        const worstFmt = s.worst < Infinity ? formatPnl(s.worst) : { formatted: '--', colorClass: '' };
+        const barColor = `var(--accent-${s.color})`;
+
+        return `
+            <tr>
+                <td>
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <span style="width:32px;height:32px;font-size:14px;font-weight:700;font-family:var(--font-mono);background:var(--accent-${s.color}-dim);color:var(--accent-${s.color});border-radius:8px;display:inline-flex;align-items:center;justify-content:center">${s.icon}</span>
+                        <span style="font-weight:600;font-size:13px">${s.name}</span>
+                    </div>
+                </td>
+                <td style="font-family:var(--font-mono);font-weight:600">${s.signals}</td>
+                <td>
+                    <div style="display:flex;align-items:center;gap:8px">
+                        <div style="width:50px;height:6px;background:var(--bg-secondary);border-radius:3px;overflow:hidden">
+                            <div style="width:${winRate}%;height:100%;background:${barColor};border-radius:3px"></div>
+                        </div>
+                        <span style="font-family:var(--font-mono);font-size:13px">${winRate}%</span>
+                    </div>
+                </td>
+                <td><span class="pnl ${pnlFmt.colorClass}" style="font-size:14px">${pnlFmt.formatted}</span></td>
+                <td><span class="pnl ${avgPnlFmt.colorClass}">${avgPnlFmt.formatted}</span></td>
+                <td><span class="pnl ${bestFmt.colorClass}">${bestFmt.formatted}</span></td>
+                <td><span class="pnl ${worstFmt.colorClass}">${worstFmt.formatted}</span></td>
+                <td style="font-family:var(--font-mono);font-size:12px">${formatDuration(Math.round(avgHold))}</td>
+                <td>${s.disabled
+                    ? '<span class="adj-status adj-reverted">OFF</span>'
+                    : '<span class="adj-status adj-applied">ON</span>'}</td>
+            </tr>
+        `;
+    }).join('');
+}
+
 // Main refresh function
 async function refreshDashboard() {
     try {
         console.log('Refreshing dashboard...');
 
         // Fetch all data in parallel
-        const [activeSignals, recentRecs, recentOutcomes, enhancedMetrics, backtestResults, adjustments] = await Promise.all([
+        const [activeSignals, recentRecs, recentOutcomes, enhancedMetrics, backtestResults, adjustments, signalFeed, comparisonData] = await Promise.all([
             fetchActiveSignals(),
             fetchRecentRecommendations(),
             fetchRecentOutcomes(),
             fetchEnhancedMetrics(),
             fetchBacktestResults(),
-            fetchAdjustments()
+            fetchAdjustments(),
+            fetchSignalFeed(),
+            fetchStrategyComparison()
         ]);
 
         console.log('Data fetched:', {
@@ -727,17 +1022,21 @@ async function refreshDashboard() {
             outcomes: recentOutcomes.length,
             enhanced: enhancedMetrics.length,
             backtests: backtestResults.length,
-            adjustments: adjustments.length
+            adjustments: adjustments.length,
+            feed: signalFeed.length,
+            comparison: comparisonData.length
         });
 
         // Update all sections
         updateOverviewMetrics(recentRecs, recentOutcomes);
         updateStrategyCards(recentRecs, recentOutcomes);
+        renderSignalFeed(signalFeed);
         renderActiveSignals(activeSignals);
         renderOutcomes(recentOutcomes);
         updateEnhancedAnalytics(enhancedMetrics);
         renderBacktestResults(backtestResults);
         renderAdjustments(adjustments);
+        renderStrategyComparison(comparisonData);
         updateTimestamp();
 
         // Update status indicator
@@ -759,15 +1058,22 @@ async function init() {
 
     // Initialize charts
     initCharts();
+    initPnlCurveChart();
 
     // Initial load
     await refreshDashboard();
+
+    // Load P&L curve
+    await loadPnlCurveData();
 
     // Set up auto-refresh
     setInterval(refreshDashboard, REFRESH_INTERVAL);
 
     // Refresh chart data every 60s
     setInterval(loadChartData, REFRESH_INTERVAL);
+
+    // Refresh P&L curve every 5 minutes
+    setInterval(loadPnlCurveData, 300000);
 
     console.log(`Dashboard initialized. Refreshing every ${REFRESH_INTERVAL / 1000}s`);
 }

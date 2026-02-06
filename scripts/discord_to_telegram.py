@@ -39,6 +39,7 @@ from integrations.telegram.client import TelegramClient, InlineButton, CallbackH
 from integrations.telegram.trade_bot import TradeOpportunity
 from integrations.telegram.quick_analyzer import QuickAnalyzer, QuickAnalysisResult
 from integrations.telegram.message_formatter import MessageFormatter
+from scripts.safe_trade_executor import SafeTradeExecutor, KeyLevelCalculator
 
 
 class DiscordTelegramBridge:
@@ -263,6 +264,7 @@ class DiscordTelegramBridge:
             discord_content=signal.raw_content,
             discord_author=signal.author,
             discord_channel=signal.source_channel,
+            discord_timestamp=signal.timestamp,
         )
 
         result = await self.telegram.send(stage1_msg, parse_mode="HTML")
@@ -474,87 +476,115 @@ class DiscordTelegramBridge:
         opp: TradeOpportunity,
         analysis: Optional[QuickAnalysisResult]
     ) -> Dict[str, Any]:
-        """Execute trade on Hyperliquid"""
+        """
+        Execute trade using SafeTradeExecutor.
+
+        MANDATORY: All trades must have stop losses based on key technical levels.
+        """
         try:
-            from hyperliquid.exchange import Exchange
-            from hyperliquid.info import Info
-            from hyperliquid.utils import constants
+            # Use SafeTradeExecutor for mandatory stop loss handling
+            executor = SafeTradeExecutor()
 
-            secret = os.getenv("HYP_SECRET")
-            account = os.getenv("ACCOUNT_ADDRESS")
+            # Get minimum size for the asset
+            meta = executor.info.meta()
+            sz_decimals = 0
+            for asset in meta['universe']:
+                if asset['name'] == opp.ticker:
+                    sz_decimals = asset.get('szDecimals', 0)
+                    break
 
-            if not secret or not account:
-                return {"success": False, "error": "HYP_SECRET or ACCOUNT_ADDRESS not set"}
-
-            # Initialize
-            info = Info(constants.MAINNET_API_URL, skip_ws=True)
-            exchange = Exchange(None, constants.MAINNET_API_URL, account_address=account)
-            exchange.wallet = exchange._wallet_from_key(secret)
-
-            # Get current price
-            mids = info.all_mids()
-            current_price = float(mids.get(opp.ticker, 0))
-
+            # Calculate position size based on risk
+            current_price = executor.level_calc.get_current_price(opp.ticker)
             if current_price == 0:
                 return {"success": False, "error": f"Could not get price for {opp.ticker}"}
 
-            # Use entry price or current price
-            entry_price = opp.entry_price if opp.entry_price > 0 else current_price
-
-            # Calculate position size (1.5% risk of $10k account = $150)
-            risk_amount = 150  # Adjust based on account size
-            if opp.stop_loss > 0:
-                stop_distance = abs(entry_price - opp.stop_loss)
-                size = risk_amount / stop_distance if stop_distance > 0 else 0.01
-            else:
-                size = 0.01  # Minimum size if no stop
-
-            # Round size
-            size = round(size, 4)
-
-            # Determine side
-            is_buy = opp.direction == "LONG"
-
-            # Set leverage
-            exchange.update_leverage(opp.leverage, opp.ticker)
-
-            # Place market order
-            order_result = exchange.market_open(
+            # Get key-level based stop
+            stop_level = executor.level_calc.calculate_stop_loss(
                 opp.ticker,
-                is_buy,
-                size,
-                None  # Market order
+                opp.direction,
+                current_price
             )
 
-            if order_result.get("status") == "ok":
-                fill_price = order_result.get("response", {}).get("data", {}).get("statuses", [{}])[0].get("px", entry_price)
-                fill_price = float(fill_price)
-                notional = size * fill_price
-
-                # Set stop loss if provided
-                if opp.stop_loss > 0:
-                    tp_trigger = {"triggerPx": opp.stop_loss, "isMarket": True, "tpsl": "sl"}
-                    exchange.order(opp.ticker, not is_buy, size, opp.stop_loss, {"trigger": tp_trigger})
-
-                # Calculate risk
-                if opp.stop_loss:
-                    actual_risk = abs(fill_price - opp.stop_loss) * size
-                    risk_pct = (actual_risk / 10000) * 100  # Assuming $10k account
+            # Use signal's stop if provided and valid, otherwise use key-level stop
+            if opp.stop_loss and opp.stop_loss > 0:
+                # Validate signal's stop is on correct side
+                if opp.direction == "SHORT" and opp.stop_loss > current_price:
+                    stop_price = opp.stop_loss
+                    stop_method = "signal"
+                elif opp.direction == "LONG" and opp.stop_loss < current_price:
+                    stop_price = opp.stop_loss
+                    stop_method = "signal"
                 else:
-                    actual_risk = 0
-                    risk_pct = 0
+                    # Signal's stop is invalid, use key-level stop
+                    stop_price = stop_level.price
+                    stop_method = stop_level.method
+            else:
+                # No signal stop, use key-level stop
+                stop_price = stop_level.price
+                stop_method = stop_level.method
+
+            # Calculate size based on risk (1.5% of estimated $100 account for small accounts)
+            risk_pct = 0.015
+            account_estimate = 100  # Will be replaced with actual equity
+            try:
+                user_state = executor.info.user_state(executor.account)
+                account_value = float(user_state.get('marginSummary', {}).get('accountValue', 100))
+                account_estimate = account_value
+            except:
+                pass
+
+            risk_amount = account_estimate * risk_pct
+            stop_distance = abs(current_price - stop_price)
+
+            if stop_distance > 0:
+                size = risk_amount / stop_distance
+            else:
+                size = 0.01
+
+            # Round to valid size
+            if sz_decimals == 0:
+                size = max(1, round(size))
+                # Ensure minimum notional (~$10)
+                min_size = max(1, int(10 / current_price) + 1)
+                size = max(size, min_size)
+            else:
+                size = round(size, sz_decimals)
+
+            # Execute with SafeTradeExecutor
+            if opp.direction == "SHORT":
+                result = executor.market_short(
+                    opp.ticker,
+                    size,
+                    leverage=opp.leverage,
+                    stop_price=stop_price,
+                    take_profit=opp.take_profit[0] if opp.take_profit else None
+                )
+            else:
+                result = executor.market_long(
+                    opp.ticker,
+                    size,
+                    leverage=opp.leverage,
+                    stop_price=stop_price,
+                    take_profit=opp.take_profit[0] if opp.take_profit else None
+                )
+
+            if result.success:
+                notional = result.size * result.entry_price
+                actual_risk = abs(result.entry_price - result.stop_loss) * result.size
+                risk_pct = (actual_risk / account_estimate) * 100
 
                 return {
                     "success": True,
-                    "fill_price": fill_price,
-                    "size": size,
+                    "fill_price": result.entry_price,
+                    "size": result.size,
                     "notional": notional,
                     "risk_amount": actual_risk,
                     "risk_pct": risk_pct,
+                    "stop_loss": result.stop_loss,
+                    "stop_method": result.stop_method,
                 }
             else:
-                error_data = order_result.get('response', {}).get('data', {})
-                return {"success": False, "error": str(error_data)[:200]}
+                return {"success": False, "error": result.error or "Trade execution failed"}
 
         except Exception as e:
             return {"success": False, "error": str(e)[:200]}

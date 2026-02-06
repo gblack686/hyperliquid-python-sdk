@@ -118,11 +118,12 @@ class PaperTradingScheduler:
 
         # Initialize strategies
         self.strategies = [
-            FundingStrategy(
-                min_funding_rate=0.01,
-                min_volume=100_000,
-                expiry_hours=8,
-            ),
+            # FundingStrategy disabled - consistently losing money
+            # FundingStrategy(
+            #     min_funding_rate=0.01,
+            #     min_volume=100_000,
+            #     expiry_hours=8,
+            # ),
             GridStrategy(
                 lookback_hours=72,
                 min_range_pct=3.0,
@@ -321,11 +322,12 @@ class PaperTradingScheduler:
 
             # Rebuild
             self.strategies = [
-                FundingStrategy(
-                    min_funding_rate=funding_params.get("min_funding_rate", 0.01),
-                    min_volume=funding_params.get("min_volume", 100_000),
-                    expiry_hours=int(funding_params.get("expiry_hours", 8)),
-                ),
+                # FundingStrategy disabled - consistently losing money
+                # FundingStrategy(
+                #     min_funding_rate=funding_params.get("min_funding_rate", 0.01),
+                #     min_volume=funding_params.get("min_volume", 100_000),
+                #     expiry_hours=int(funding_params.get("expiry_hours", 8)),
+                # ),
                 GridStrategy(
                     lookback_hours=int(grid_params.get("lookback_hours", 72)),
                     min_range_pct=grid_params.get("min_range_pct", 3.0),

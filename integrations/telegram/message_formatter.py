@@ -50,6 +50,31 @@ def format_price(price: Optional[float], prefix: str = "$") -> str:
     return f"{prefix}{price:,.2f}"
 
 
+def format_time_ago(dt: Optional[datetime]) -> str:
+    """Format datetime as relative time (e.g., '2h ago', '15m ago')"""
+    if dt is None:
+        return "N/A"
+
+    now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+    diff = now - dt
+
+    total_seconds = int(diff.total_seconds())
+
+    if total_seconds < 0:
+        return "just now"
+    elif total_seconds < 60:
+        return f"{total_seconds}s ago"
+    elif total_seconds < 3600:
+        minutes = total_seconds // 60
+        return f"{minutes}m ago"
+    elif total_seconds < 86400:
+        hours = total_seconds // 3600
+        return f"{hours}h ago"
+    else:
+        days = total_seconds // 86400
+        return f"{days}d ago"
+
+
 def format_percentage(value: Optional[float], decimals: int = 1) -> str:
     """Format as percentage"""
     if value is None:
@@ -75,6 +100,7 @@ class MessageFormatter:
         discord_content: str,
         discord_author: str,
         discord_channel: str,
+        discord_timestamp: Optional[datetime] = None,
     ) -> str:
         """
         Stage 1: Signal Received notification.
@@ -88,6 +114,10 @@ class MessageFormatter:
         if len(discord_content) > 200:
             discord_content = discord_content[:197] + "..."
 
+        # Time ago
+        time_ago = format_time_ago(discord_timestamp) if discord_timestamp else ""
+        time_suffix = f" | {time_ago}" if time_ago and time_ago != "N/A" else ""
+
         msg = f"""<b>{SYMBOLS['signal']} DISCORD SIGNAL</b>
 
 <b>{ticker}</b> {dir_symbol} {direction.upper()} | {conf_pct}% Confidence
@@ -96,7 +126,7 @@ class MessageFormatter:
 <b>DISCORD SOURCE</b>
 {SYMBOLS['divider']}
 <i>"{discord_content}"</i>
-- @{discord_author} in #{discord_channel}
+- @{discord_author} in #{discord_channel}{time_suffix}
 
 <i>Analyzing...</i>"""
 
@@ -164,9 +194,9 @@ class MessageFormatter:
         rsi_sym = get_direction_symbol('long' if rsi_signal == 'bull' else 'short' if rsi_signal == 'bear' else 'neutral')
         rsi_zone = "Oversold territory" if rsi and rsi < 30 else "Overbought territory" if rsi and rsi > 70 else "Neutral zone"
 
-        # Trend formatting
+        # Trend formatting (escape < and > for HTML)
         trend_sym = get_direction_symbol('long' if trend_signal == 'bull' else 'short' if trend_signal == 'bear' else 'neutral')
-        trend_desc = "Bullish (EMA20 > EMA50)" if trend_signal == 'bull' else "Bearish (EMA20 < EMA50)" if trend_signal == 'bear' else "Neutral"
+        trend_desc = "Bullish (EMA20 &gt; EMA50)" if trend_signal == 'bull' else "Bearish (EMA20 &lt; EMA50)" if trend_signal == 'bear' else "Neutral"
 
         # Bias formatting
         bias_sym = get_bias_symbol(bias_score)
@@ -175,7 +205,8 @@ class MessageFormatter:
         if len(discord_content) > 150:
             discord_content = discord_content[:147] + "..."
 
-        # Discord timestamp
+        # Discord timestamp - show both relative and absolute
+        time_ago = format_time_ago(discord_timestamp)
         ts_str = discord_timestamp.strftime("%H:%M UTC") if discord_timestamp else "N/A"
 
         msg = f"""<b>{SYMBOLS['signal']} SIGNAL READY</b>
@@ -203,7 +234,7 @@ Bias:       {bias_score}/5 {bias_sym} {bias_label}
 <b>DISCORD QUOTE</b>
 {SYMBOLS['divider']}
 <i>"{discord_content}"</i>
-- @{discord_author} | #{discord_channel} | {ts_str}
+- @{discord_author} | #{discord_channel} | {time_ago}
 
 Report: {report_path}
 
@@ -337,7 +368,12 @@ Report: {report_path}"""
 
 # For testing
 if __name__ == "__main__":
+    from datetime import timedelta
+
     formatter = MessageFormatter()
+
+    # Simulate a message from 25 minutes ago
+    test_timestamp = datetime.now() - timedelta(minutes=25)
 
     # Test Stage 1
     print("=== Stage 1: Signal Received ===")
@@ -348,6 +384,7 @@ if __name__ == "__main__":
         discord_content="BTC short here, SL 82718",
         discord_author="sea-scalper-farouk",
         discord_channel="sea-scalper-farouk",
+        discord_timestamp=test_timestamp,
     )
     print(msg1)
 
@@ -372,7 +409,7 @@ if __name__ == "__main__":
         discord_content="BTC short here, SL 82718",
         discord_author="sea-scalper-farouk",
         discord_channel="sea-scalper-farouk",
-        discord_timestamp=datetime.now(),
+        discord_timestamp=test_timestamp,
         report_path="outputs/discord_signals/BTC_20260131_183045/",
     )
     print(msg2)

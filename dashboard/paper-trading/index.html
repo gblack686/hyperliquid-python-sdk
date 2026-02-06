@@ -140,6 +140,22 @@
             </div>
         </section>
 
+        <!-- Live Signal Feed -->
+        <section class="signal-feed-section">
+            <div class="section-header">
+                <h2>Signal Feed</h2>
+                <div class="feed-header-right">
+                    <span class="feed-live-indicator"><span class="feed-live-dot"></span> Live</span>
+                    <span class="badge" id="feed-count">0</span>
+                </div>
+            </div>
+            <div class="card signal-feed-card">
+                <div class="signal-feed" id="signal-feed">
+                    <div class="feed-empty">Waiting for signals...</div>
+                </div>
+            </div>
+        </section>
+
         <!-- Market Charts -->
         <section class="charts-section">
             <div class="section-header">
@@ -168,6 +184,63 @@
                 </div>
                 <div id="candlestick-chart" class="chart-container"></div>
                 <div id="volume-chart" class="chart-container chart-volume"></div>
+            </div>
+        </section>
+
+        <!-- P&L Equity Curve -->
+        <section class="pnl-curve-section">
+            <div class="section-header">
+                <h2>Cumulative P&L</h2>
+                <div class="pnl-controls">
+                    <div class="pnl-tf-tabs">
+                        <button class="pnl-tf-btn active" data-pnltf="7d" onclick="selectPnlTimeframe('7d')">7D</button>
+                        <button class="pnl-tf-btn" data-pnltf="30d" onclick="selectPnlTimeframe('30d')">30D</button>
+                        <button class="pnl-tf-btn" data-pnltf="all" onclick="selectPnlTimeframe('all')">All</button>
+                    </div>
+                </div>
+            </div>
+            <div class="card charts-card">
+                <div class="pnl-summary">
+                    <div class="pnl-total">
+                        <span class="pnl-total-label">Total P&L</span>
+                        <span class="pnl-total-value" id="pnl-curve-total">$--</span>
+                    </div>
+                    <div class="pnl-stats">
+                        <span class="pnl-stat" id="pnl-curve-trades">-- trades</span>
+                        <span class="pnl-stat" id="pnl-curve-winrate">--% win rate</span>
+                        <span class="pnl-stat" id="pnl-curve-best">Best: $--</span>
+                        <span class="pnl-stat" id="pnl-curve-worst">Worst: $--</span>
+                    </div>
+                </div>
+                <div id="pnl-curve-chart" class="chart-container" style="height:300px"></div>
+            </div>
+        </section>
+
+        <!-- Strategy Comparison -->
+        <section class="comparison-section">
+            <div class="section-header">
+                <h2>Strategy Comparison</h2>
+                <span class="badge" id="comparison-period">All Time</span>
+            </div>
+            <div class="card table-card">
+                <table class="data-table" id="comparison-table">
+                    <thead>
+                        <tr>
+                            <th>Strategy</th>
+                            <th>Signals</th>
+                            <th>Win Rate</th>
+                            <th>Total P&L</th>
+                            <th>Avg P&L</th>
+                            <th>Best</th>
+                            <th>Worst</th>
+                            <th>Avg Hold</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="comparison-tbody">
+                        <tr><td colspan="9" class="loading">Loading...</td></tr>
+                    </tbody>
+                </table>
             </div>
         </section>
 

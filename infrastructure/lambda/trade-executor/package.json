@@ -1,0 +1,20 @@
+{
+  "name": "trade-executor-lambda",
+  "version": "1.0.0",
+  "description": "Secure trade executor for Hyperliquid - isolates signing key from OpenClaw",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.500.0",
+    "@aws-sdk/client-ssm": "^3.500.0",
+    "@aws-sdk/client-sns": "^3.500.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.131",
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0"
+  }
+}
