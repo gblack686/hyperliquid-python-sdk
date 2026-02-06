@@ -1,5 +1,5 @@
 ---
-model: opus
+model: sonnet
 description: Backtest a formula-based strategy using GeneticAlpha from quantpylib
 allowed-tools: Bash, Read, Write, Glob, Grep, Edit
 ---

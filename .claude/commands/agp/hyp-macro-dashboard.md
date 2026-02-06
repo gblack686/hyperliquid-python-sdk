@@ -1,3 +1,9 @@
+---
+model: haiku
+description: TradFi metrics, ETF flows, Treasury rates, and Fed liquidity dashboard
+allowed-tools: Bash(date:*), Bash(python:*), Bash(curl:*), Task, Write, Read, WebSearch, WebFetch
+---
+
 # Macro Dashboard
 
 TradFi metrics, ETF flows, Treasury rates, and Fed liquidity data.

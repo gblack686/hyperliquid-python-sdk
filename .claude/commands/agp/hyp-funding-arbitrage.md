@@ -1,15 +1,15 @@
 ---
-model: opus
+model: sonnet
 description: Scan for funding rate arbitrage opportunities across all markets
 argument-hint: "[min_rate] - minimum funding rate threshold (default 0.01%)"
-allowed-tools: Bash(date:*), Bash(mkdir:*), Bash(python:*), Task, Write, Read
+allowed-tools: Bash(date:*), Bash(mkdir:*), Bash(python:*), Task, Write, Read, Skill
 ---
 
 # Funding Arbitrage Scanner
 
 ## Purpose
 
-Scan all Hyperliquid perpetual markets for funding rate arbitrage opportunities. Identify extreme funding rates where traders can profit from holding positions that receive funding payments while managing directional risk.
+Scan all Hyperliquid perpetual markets for funding rate arbitrage opportunities. Fetch funding + liquidity data in PARALLEL, filter extremes, then run per-ticker technical analysis in PARALLEL, and synthesize into ranked opportunities in ONE combined Task.
 
 ## Variables
 
@@ -19,185 +19,81 @@ Scan all Hyperliquid perpetual markets for funding rate arbitrage opportunities.
 
 ## Instructions
 
-- Fetch funding rates for all perpetual markets
-- Filter for extreme positive and negative rates
-- Analyze technical setup for directional risk
-- Calculate expected funding income vs directional risk
-- Generate ranked opportunities with entry criteria
+- Fetch funding rates AND contract/volume data in PARALLEL
+- Filter extremes from funding data
+- Run per-ticker technical analysis in PARALLEL for top opportunities
+- Synthesize risk assessment + trade setups + ranking in ONE combined Task
 
 ## Workflow
 
 ### Step 0: Setup
 
 1. Get timestamp: `date +"%Y-%m-%d_%H-%M-%S"`
-2. Create output structure:
+2. Create output:
    ```bash
    mkdir -p OUTPUT_DIR/{funding,analysis,opportunities}
    ```
 
-### Agent Chain
+### Step 1: PARALLEL Data Collection
 
-#### Step 1: All Funding Rates Agent
+Launch BOTH of these as parallel Task agents (model: haiku) simultaneously:
 
-Invoke: `/hyp-funding`
+| Agent | Invoke | Purpose |
+|-------|--------|---------|
+| Funding Rates | `/hyp-funding` | All perpetual funding rates |
+| Contracts/Volume | `/hyp-contracts` | Volume, OI, spread data for all markets |
 
-- **Purpose**: Get funding rates for all perpetuals
-- **Output**: Complete funding rate table
-- **Save to**: `OUTPUT_DIR/funding/all_rates.md`
+IMPORTANT: Both are INDEPENDENT. Launch both at once.
 
-#### Step 2: Extreme Funding Filter Agent
+### Step 2: Filter Extremes
 
-Use Task agent to filter extreme rates:
+Once both return, filter funding data for:
 
-```
-Filter Criteria:
+**POSITIVE FUNDING (Short Opportunities):**
+- Rate >= +{MIN_RATE}% per 8h, top 10 by rate descending
 
-POSITIVE FUNDING (Short Opportunities):
-- Rate >= +{MIN_RATE}% per 8h
-- Sort by rate descending
-- Top 10 highest rates
+**NEGATIVE FUNDING (Long Opportunities):**
+- Rate <= -{MIN_RATE}% per 8h, top 10 by rate ascending
 
-NEGATIVE FUNDING (Long Opportunities):
-- Rate <= -{MIN_RATE}% per 8h
-- Sort by rate ascending (most negative)
-- Top 10 most negative rates
+**Liquidity Filter** (from contracts data):
+- 24h volume >= $1M, OI >= $500K, tight spread
 
-Calculate Annualized Yield:
-- Daily = Rate * 3 (3 funding periods per day)
-- Annual = Daily * 365
-- Example: 0.05% per 8h = 54.75% APY
+Calculate annualized yield: APY = Rate * 3 * 365
 
-Output:
-| Ticker | Rate (8h) | Rate (24h) | APY | Direction |
-```
+### Step 3: PARALLEL Per-Ticker Technical Analysis
 
-- **Save to**: `OUTPUT_DIR/funding/filtered_opportunities.md`
+For the top 5 opportunities in EACH direction, launch parallel Task agents (model: haiku) - one per ticker:
 
-#### Step 3: Volume and Liquidity Check Agent
+Each agent fetches:
+- `/hyp-levels {TICKER} 4h` - Key S/R levels
+- `/hyp-rsi {TICKER} 4h` - Momentum context
+- `/hyp-ema {TICKER} 4h` - Trend direction
 
-Invoke: `/hyp-contracts`
+Example: If top tickers are DOGE, PEPE, WIF, BONK, SHIB, launch 5 parallel agents.
 
-For each filtered opportunity, check:
-- 24h volume (minimum $1M)
-- Open interest (minimum $500K)
-- Spread (should be tight)
+IMPORTANT: Launch ALL ticker agents at once in a SINGLE message.
 
-- **Save to**: `OUTPUT_DIR/analysis/liquidity.md`
+### Step 4: Combined Analysis + Ranking (Single Task)
 
-#### Step 4: Technical Context Agent
+Once all technical data returns, use ONE Task agent (model: sonnet) to perform ALL of:
 
-For top 5 opportunities in each direction:
+**A. Risk Assessment** per opportunity:
+- Funding edge: expected 24h/weekly income, break-even price move
+- Directional risk: trend alignment, S/R distance, RSI extreme
+- Risk score (0-100): +30 high rate, +20 trend aligned, +20 RSI supports, +15 near S/R, +15 liquid; -20 trend against, -20 RSI against, -10 illiquid
+- Classification: PURE_CARRY / TREND_ALIGNED / CONTRARIAN / AVOID
 
-Invoke: `/hyp-levels {TICKER} 4h` - Key S/R levels
-Invoke: `/hyp-rsi {TICKER} 4h` - Momentum context
-Invoke: `/hyp-ema {TICKER} 4h` - Trend direction
+**B. Trade Setups** for viable opportunities:
+- Entry zone (near S/R if possible), size (1% account risk), leverage (1-3x)
+- Stop: 2x expected daily funding income
+- Targets: funding accumulation, favorable S/R move
+- Exit trigger: rate drops below threshold
 
-- **Save to**: `OUTPUT_DIR/analysis/{TICKER}_technical.md`
+**C. Final Ranking** (weighted score):
+- Funding Yield 40%, Risk Profile 30%, Liquidity 15%, Timing 15%
+- 80+: Strong, 60-79: Good, 40-59: Moderate, <40: Pass
 
-#### Step 5: Risk Assessment Agent
-
-Use Task agent to assess each opportunity:
-
-```
-For each opportunity, calculate:
-
-1. Funding Edge
-   - Expected 24h funding income (rate * position size * 3)
-   - Expected weekly income
-   - Break-even price move
-
-2. Directional Risk
-   - Trend direction (aligned or against position)
-   - Distance to key S/R level
-   - RSI extreme (overbought for shorts, oversold for longs)
-
-3. Risk Score (0-100)
-   - +30: Funding rate > 0.03%
-   - +20: Trend aligned with position
-   - +20: RSI supports direction
-   - +15: Near favorable S/R level
-   - +15: High liquidity (volume > $10M)
-   - -20: Trend against position
-   - -20: RSI extreme against position
-   - -10: Low liquidity
-
-4. Strategy Classification
-   - PURE_CARRY: Low directional risk, focus on funding
-   - TREND_ALIGNED: Funding + trend in same direction
-   - CONTRARIAN: Funding against trend (higher risk)
-   - AVOID: Poor risk/reward
-```
-
-- **Save to**: `OUTPUT_DIR/analysis/risk_assessment.md`
-
-#### Step 6: Trade Setup Generator Agent
-
-Use Task agent to generate specific setups:
-
-```
-For each viable opportunity:
-
-ENTRY CRITERIA:
-- Optimal entry zone (near S/R level if possible)
-- Position size: Based on 1% account risk
-- Leverage: 1-3x (keep low for carry trades)
-
-RISK MANAGEMENT:
-- Stop loss: 2x expected daily funding income
-- Example: If daily funding = 0.15%, stop = -0.30%
-- Max hold time: Until funding normalizes (<0.005%)
-
-PROFIT TARGETS:
-- Primary: Funding accumulation
-- Secondary: Favorable price move to S/R
-- Exit trigger: Funding rate drops below threshold
-
-HEDGING OPTIONS (for pure carry):
-- Spot hedge: Hold spot opposite direction
-- Delta neutral: Balance with correlated asset
-```
-
-- **Save to**: `OUTPUT_DIR/opportunities/trade_setups.md`
-
-#### Step 7: Opportunity Ranking Agent
-
-Use Task agent to rank all opportunities:
-
-```
-Ranking Criteria (weighted score):
-
-1. Funding Yield (40%)
-   - APY comparison
-   - Rate stability (check if volatile)
-
-2. Risk Profile (30%)
-   - Directional alignment
-   - Technical setup quality
-   - Liquidation safety
-
-3. Liquidity (15%)
-   - Volume rank
-   - Spread quality
-   - OI depth
-
-4. Timing (15%)
-   - Entry opportunity (near S/R)
-   - Funding trend (increasing/decreasing)
-
-Final Ranking: Score 0-100
-- 80+: Strong opportunity
-- 60-79: Good opportunity
-- 40-59: Moderate opportunity
-- <40: Pass
-```
-
-- **Save to**: `OUTPUT_DIR/opportunities/rankings.md`
-
-#### Step 8: Summary Report
-
-Compile funding arbitrage report:
-
-- **Save to**: `OUTPUT_DIR/arbitrage_report.md`
+Save to `OUTPUT_DIR/arbitrage_report.md`
 
 ## Report
 
@@ -215,16 +111,10 @@ Compile funding arbitrage report:
 ### Top Short Opportunities (Positive Funding)
 | Rank | Ticker | Rate (8h) | APY | Risk Score | Recommendation |
 |------|--------|-----------|-----|------------|----------------|
-| 1 | XXX | +0.XX% | XXX% | XX/100 | [ACTION] |
-| 2 | XXX | +0.XX% | XXX% | XX/100 | [ACTION] |
-| ... | ... | ... | ... | ... | ... |
 
 ### Top Long Opportunities (Negative Funding)
 | Rank | Ticker | Rate (8h) | APY | Risk Score | Recommendation |
 |------|--------|-----------|-----|------------|----------------|
-| 1 | XXX | -0.XX% | XXX% | XX/100 | [ACTION] |
-| 2 | XXX | -0.XX% | XXX% | XX/100 | [ACTION] |
-| ... | ... | ... | ... | ... | ... |
 
 ### Best Opportunity Detail
 
@@ -252,23 +142,12 @@ Compile funding arbitrage report:
 ### Risk Warnings
 - [Warning 1]
 - [Warning 2]
-
-### Output Files
-- Full Report: OUTPUT_DIR/arbitrage_report.md
-- All Funding Rates: OUTPUT_DIR/funding/all_rates.md
-- Trade Setups: OUTPUT_DIR/opportunities/trade_setups.md
-- Rankings: OUTPUT_DIR/opportunities/rankings.md
 ```
 
 ## Examples
 
 ```bash
-# Scan with default 0.01% threshold
 /hyp-funding-arbitrage
-
-# Scan for extreme funding only (0.03%+)
 /hyp-funding-arbitrage 0.03
-
-# Scan with lower threshold (0.005%+)
 /hyp-funding-arbitrage 0.005
 ```

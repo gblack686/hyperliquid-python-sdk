@@ -1,3 +1,9 @@
+---
+model: sonnet
+description: Analyze positions for trim opportunities using multi-timeframe technical signals
+allowed-tools: Bash(date:*), Bash(mkdir:*), Bash(python:*), Task, Write, Read, Skill
+---
+
 # Trim Analyzer
 
 ## Purpose

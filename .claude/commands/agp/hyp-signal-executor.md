@@ -1,5 +1,5 @@
 ---
-model: opus
+model: sonnet
 description: Execute trades from Discord signals with risk management and confirmation
 argument-hint: "[ticker] [direction] [confidence] - or 'auto' for top signal"
 allowed-tools: Bash(date:*), Bash(mkdir:*), Bash(python:*), Task, Write, Read, Skill

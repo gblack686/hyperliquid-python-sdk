@@ -1,3 +1,9 @@
+---
+model: haiku
+description: Real-time Binance Futures liquidation feed via WebSocket
+allowed-tools: Bash(date:*), Bash(python:*), Task, Write, Read
+---
+
 # Liquidation Stream
 
 Real-time Binance Futures liquidation feed via WebSocket.

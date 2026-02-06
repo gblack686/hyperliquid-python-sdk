@@ -1,3 +1,9 @@
+---
+model: haiku
+description: Side-by-side Binance and Hyperliquid market data comparison
+allowed-tools: Bash(date:*), Bash(python:*), Task, Write, Read
+---
+
 # Unified Market Data
 
 Side-by-side Binance + Hyperliquid market data comparison.

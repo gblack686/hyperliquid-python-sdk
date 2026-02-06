@@ -1,3 +1,9 @@
+---
+model: haiku
+description: Validate all open positions have stop loss and take profit coverage
+allowed-tools: Bash(date:*), Bash(python:*), Task, Write, Read, Skill
+---
+
 # Validate Coverage
 
 ## Purpose

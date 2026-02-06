@@ -1,5 +1,5 @@
 ---
-model: opus
+model: sonnet
 description: Execute trades with mandatory stop losses based on key technical levels
 argument-hint: "[long/short] [ticker] [size] - e.g., 'short XRP 7' or 'preview BTC'"
 allowed-tools: Bash(date:*), Bash(mkdir:*), Bash(python:*), Task, Write, Read, Skill

@@ -1,3 +1,9 @@
+---
+model: sonnet
+description: Adaptive trailing stops with profit skimming using ATR, volume, and Bollinger Bands
+allowed-tools: Bash(date:*), Bash(mkdir:*), Bash(python:*), Task, Write, Read, Skill
+---
+
 # Adaptive Trailing Stops
 
 ## Purpose

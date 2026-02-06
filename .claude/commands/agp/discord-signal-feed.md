@@ -1,4 +1,5 @@
 ---
+model: haiku
 description: Analyze trade signals from monitored Discord channels - sentiment, hot tickers, consensus
 argument-hint: "[ticker] [hours] - e.g., BTC 24 or just 24 for overview"
 allowed-tools: Bash(python:*)

@@ -1,3 +1,9 @@
+---
+model: haiku
+description: Ultra-fast market status report using parallel API fetching
+allowed-tools: Bash(date:*), Bash(python:*), Task, Write, Read, Skill
+---
+
 # Fast Market Report
 
 Ultra-fast market status report using parallel API fetching.

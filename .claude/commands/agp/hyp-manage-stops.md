@@ -1,3 +1,9 @@
+---
+model: sonnet
+description: Analyze open positions and dynamically adjust stop loss and take profit orders
+allowed-tools: Bash(date:*), Bash(mkdir:*), Bash(python:*), Task, Write, Read, Skill
+---
+
 # Manage Stops
 
 ## Purpose

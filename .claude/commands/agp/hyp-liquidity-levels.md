@@ -1,3 +1,9 @@
+---
+model: sonnet
+description: Identify key liquidity zones for strategic order placement (TP/SL)
+allowed-tools: Bash(date:*), Bash(mkdir:*), Bash(python:*), Task, Write, Read, Skill
+---
+
 # Liquidity Levels
 
 Identify key liquidity zones for strategic order placement (TP/SL).
