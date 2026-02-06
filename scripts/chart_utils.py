@@ -20,37 +20,53 @@ from matplotlib.patches import Rectangle
 CHART_DIR = Path(__file__).parent.parent / "outputs" / "charts"
 CHART_DIR.mkdir(parents=True, exist_ok=True)
 
-# Chart styling
+# Chart styling - TradingView dark theme palette
 COLORS = {
-    'green': '#00C853',
-    'red': '#FF5252',
-    'blue': '#2196F3',
-    'orange': '#FF9800',
-    'purple': '#9C27B0',
-    'gray': '#9E9E9E',
-    'background': '#1a1a2e',
-    'grid': '#2a2a4e',
-    'text': '#e0e0e0',
+    'green': '#26a69a',         # TV teal-green (up candles)
+    'red': '#ef5350',           # TV soft red (down candles)
+    'blue': '#42a5f5',          # Indicator blue
+    'orange': '#ffa726',        # Signal/MA orange
+    'purple': '#ab47bc',        # Alt indicators
+    'yellow': '#ffee58',        # Highlights
+    'gray': '#787b86',          # Muted text / axes
+    'background': '#131722',    # TV dark background
+    'grid': '#1e222d',          # TV grid lines
+    'text': '#d1d4dc',          # TV primary text
+    'text_muted': '#787b86',    # TV secondary text
+    'candle_up': '#26a69a',     # TV green candle
+    'candle_down': '#ef5350',   # TV red candle
+    'wick_up': '#26a69a',
+    'wick_down': '#ef5350',
+    'volume_up': '#26a69a',
+    'volume_down': '#ef5350',
+    'entry': '#ffffff',         # Entry line white
+    'stop_loss': '#ef5350',     # SL red
+    'take_profit': '#26a69a',   # TP green
+    'rr_badge': '#ffa726',      # R:R badge orange
 }
 
 def setup_dark_style():
-    """Configure matplotlib for dark theme charts."""
+    """Configure matplotlib for TradingView-style dark theme."""
     plt.style.use('dark_background')
     plt.rcParams.update({
         'figure.facecolor': COLORS['background'],
         'axes.facecolor': COLORS['background'],
         'axes.edgecolor': COLORS['grid'],
-        'axes.labelcolor': COLORS['text'],
+        'axes.labelcolor': COLORS['text_muted'],
         'text.color': COLORS['text'],
-        'xtick.color': COLORS['text'],
-        'ytick.color': COLORS['text'],
+        'xtick.color': COLORS['text_muted'],
+        'ytick.color': COLORS['text_muted'],
         'grid.color': COLORS['grid'],
-        'grid.alpha': 0.3,
+        'grid.alpha': 0.6,
+        'grid.linestyle': '-',
+        'grid.linewidth': 0.5,
         'legend.facecolor': COLORS['background'],
         'legend.edgecolor': COLORS['grid'],
+        'font.family': 'sans-serif',
         'font.size': 10,
-        'axes.titlesize': 12,
+        'axes.titlesize': 13,
         'axes.labelsize': 10,
+        'figure.dpi': 150,
     })
 
 
@@ -149,12 +165,15 @@ def calculate_ema(closes, period):
 
 
 def plot_candlestick(ax, dates, opens, highs, lows, closes, width=0.6):
-    """Plot candlestick chart on given axis."""
+    """Plot TradingView-style candlestick chart on given axis."""
     for i in range(len(dates)):
-        color = COLORS['green'] if closes[i] >= opens[i] else COLORS['red']
+        is_up = closes[i] >= opens[i]
+        body_color = COLORS['candle_up'] if is_up else COLORS['candle_down']
+        wick_color = COLORS['wick_up'] if is_up else COLORS['wick_down']
 
-        # Wick
-        ax.plot([dates[i], dates[i]], [lows[i], highs[i]], color=color, linewidth=0.8)
+        # Wick (thin line through full range)
+        ax.plot([dates[i], dates[i]], [lows[i], highs[i]],
+                color=wick_color, linewidth=0.8, solid_capstyle='round')
 
         # Body
         body_bottom = min(opens[i], closes[i])
@@ -164,12 +183,17 @@ def plot_candlestick(ax, dates, opens, highs, lows, closes, width=0.6):
             rect = Rectangle(
                 (mdates.date2num(dates[i]) - width/2, body_bottom),
                 width, body_height,
-                facecolor=color, edgecolor=color
+                facecolor=body_color if is_up else body_color,
+                edgecolor=body_color,
+                linewidth=0.5
             )
             ax.add_patch(rect)
         else:
-            # Doji - just a line
-            ax.plot([dates[i], dates[i]], [opens[i], closes[i]], color=color, linewidth=1.5)
+            # Doji
+            ax.plot([mdates.date2num(dates[i]) - width/2,
+                     mdates.date2num(dates[i]) + width/2],
+                    [opens[i], closes[i]],
+                    color=wick_color, linewidth=1.0)
 
 
 def save_chart(fig, filename, ticker=None):
@@ -183,7 +207,8 @@ def save_chart(fig, filename, ticker=None):
     else:
         filepath = CHART_DIR / f"{filename}_{timestamp}.png"
 
-    fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor=COLORS['background'])
+    fig.savefig(filepath, dpi=150, bbox_inches='tight',
+                facecolor=COLORS['background'], pad_inches=0.3)
     plt.close(fig)
 
     return str(filepath)
@@ -277,6 +302,13 @@ def calculate_scaled_exits(
         return [entry_price * (1 - step * (i + 1)) for i in range(num_levels)]
 
 
+def _to_num(x):
+    """Convert datetime or numeric x value to matplotlib numeric."""
+    if hasattr(x, 'timestamp'):
+        return mdates.date2num(x)
+    return x
+
+
 def draw_trade_setup_box(
     ax,
     price_top: float,
@@ -284,48 +316,40 @@ def draw_trade_setup_box(
     x_start,
     x_end,
     box_type: str,
-    alpha: float = 0.3
+    alpha: float = 0.15
 ):
     """
-    Draw a colored rectangular zone on the chart.
-
-    Colors:
-    - entry: white/neutral with transparency
-    - stop_loss: red with transparency
-    - take_profit: green with transparency
+    Draw a TradingView-style colored zone on the chart.
+    Clean fill with thin border - no heavy outlines.
     """
     box_colors = {
-        'entry': '#FFFFFF',           # White for entry zone
-        'stop_loss': COLORS['red'],
-        'take_profit': COLORS['green'],
+        'entry': COLORS['text'],
+        'stop_loss': COLORS['stop_loss'],
+        'take_profit': COLORS['take_profit'],
     }
 
     color = box_colors.get(box_type, COLORS['gray'])
-
-    # Convert x_start to numeric if it's a datetime
-    if hasattr(x_start, 'timestamp'):
-        x_start_num = mdates.date2num(x_start)
-    else:
-        x_start_num = x_start
-
-    # Convert x_end to numeric if it's a datetime
-    if hasattr(x_end, 'timestamp'):
-        x_end_num = mdates.date2num(x_end)
-    else:
-        x_end_num = x_end
-
+    x_start_num = _to_num(x_start)
+    x_end_num = _to_num(x_end)
     width = x_end_num - x_start_num
 
+    # Main fill - subtle
     rect = Rectangle(
         (x_start_num, price_bottom),
         width,
         price_top - price_bottom,
-        linewidth=2,
-        edgecolor=color,
+        linewidth=0,
+        edgecolor='none',
         facecolor=color,
         alpha=alpha
     )
     ax.add_patch(rect)
+
+    # Thin border lines at top and bottom only (TV style)
+    ax.hlines(price_top, x_start_num, x_end_num,
+              colors=color, linewidth=0.5, alpha=0.4)
+    ax.hlines(price_bottom, x_start_num, x_end_num,
+              colors=color, linewidth=0.5, alpha=0.4)
 
 
 def draw_scaled_levels(
@@ -337,40 +361,47 @@ def draw_scaled_levels(
     show_labels: bool = True
 ):
     """
-    Draw horizontal lines for scaled entry/exit levels.
-
-    Entry levels: dashed blue lines, numbered E1-E5
-    Exit levels: dashed green lines, labeled TP1-TP5
+    Draw TradingView-style horizontal price levels.
+    Entry levels: dashed lines with E1-E5 badge labels
+    Exit levels: dashed lines with TP1-TP5 badge labels
     """
     level_colors = {
         'entry': COLORS['blue'],
-        'exit': COLORS['green'],
+        'exit': COLORS['take_profit'],
     }
 
     color = level_colors.get(level_type, COLORS['gray'])
-
-    # Convert to numeric for hlines
-    x_start_num = mdates.date2num(x_start) if hasattr(x_start, 'timestamp') else x_start
-    x_end_num = mdates.date2num(x_end) if hasattr(x_end, 'timestamp') else x_end
+    x_start_num = _to_num(x_start)
+    x_end_num = _to_num(x_end)
 
     for i, level in enumerate(levels):
+        # Lighter alpha for further levels
+        line_alpha = 0.6 - (i * 0.08)
         ax.hlines(
             level, x_start_num, x_end_num,
             colors=color,
-            linestyles='dashed',
-            linewidth=1,
-            alpha=0.7
+            linestyles='--',
+            linewidth=0.8,
+            alpha=max(line_alpha, 0.25)
         )
         if show_labels:
             label = f"E{i+1}" if level_type == 'entry' else f"TP{i+1}"
+            # TV-style right-edge price label badge
             ax.annotate(
                 label,
                 xy=(x_end_num, level),
-                xytext=(5, 0),
+                xytext=(4, 0),
                 textcoords='offset points',
-                fontsize=8,
-                color=color,
-                va='center'
+                fontsize=7,
+                color=COLORS['background'],
+                weight='bold',
+                va='center',
+                bbox=dict(
+                    boxstyle='round,pad=0.15',
+                    facecolor=color,
+                    edgecolor='none',
+                    alpha=max(line_alpha, 0.4)
+                )
             )
 
 
@@ -384,123 +415,185 @@ def draw_trade_setup(
     show_labels: bool = True
 ):
     """
-    Draw complete trade setup visualization on price chart.
+    Draw TradingView-style R:R trade setup visualization.
 
-    Args:
-        ax: Matplotlib axis
-        setup: TradeSetup dataclass with trade parameters
-        x_start: Start x-coordinate (datetime or numeric) - typically current time
-        x_end: End x-coordinate (datetime or numeric) - extends into future
-        show_boxes: Whether to draw SL/TP zone boxes
-        show_levels: Whether to draw scaled entry/exit level lines
-        show_labels: Whether to show E1-E5 / TP1-TP5 labels
+    Uses axhspan/axhline to draw zones ACROSS THE ENTIRE CHART
+    (overlaying on candles), exactly like TradingView's R:R tool.
     """
     is_long = setup.direction.upper() == 'LONG'
+    x_start_num = _to_num(x_start)
+    x_end_num = _to_num(x_end)
 
-    # Convert to numeric for consistent drawing
-    x_start_num = mdates.date2num(x_start) if hasattr(x_start, 'timestamp') else x_start
-    x_end_num = mdates.date2num(x_end) if hasattr(x_end, 'timestamp') else x_end
-
-    # 0. Draw vertical "NOW" line at trade entry time
-    ax.axvline(x=x_start_num, color='white', linestyle='-', linewidth=1.5, alpha=0.6)
-
-    # 1. Draw stop loss zone (red box)
+    # -- STOP LOSS ZONE (red, full-width overlay on chart) --
     if setup.stop_loss and show_boxes:
         if is_long:
-            sl_top = setup.entry_price
-            sl_bottom = setup.stop_loss
-        else:  # SHORT
-            sl_top = setup.stop_loss
-            sl_bottom = setup.entry_price
+            sl_top, sl_bottom = setup.entry_price, setup.stop_loss
+        else:
+            sl_top, sl_bottom = setup.stop_loss, setup.entry_price
 
-        draw_trade_setup_box(ax, sl_top, sl_bottom, x_start_num, x_end_num, 'stop_loss', alpha=0.25)
+        # axhspan draws across FULL chart width - overlays on candles
+        ax.axhspan(sl_bottom, sl_top,
+                    facecolor=COLORS['stop_loss'], alpha=0.08, zorder=0)
 
-        # Stop loss line
-        ax.hlines(
-            setup.stop_loss, x_start_num, x_end_num,
-            colors=COLORS['red'],
-            linestyles='solid',
-            linewidth=2,
-            alpha=0.9
-        )
+        # SL line - full width
+        ax.axhline(y=setup.stop_loss, color=COLORS['stop_loss'],
+                    linewidth=1.2, alpha=0.8, linestyle='-', zorder=1)
+
+        # SL price badge on right edge
         if show_labels:
             ax.annotate(
                 f"SL {format_price(setup.stop_loss)}",
-                xy=(x_end_num, setup.stop_loss),
-                xytext=(5, 0),
+                xy=(1.0, setup.stop_loss),
+                xycoords=('axes fraction', 'data'),
+                xytext=(6, 0),
                 textcoords='offset points',
-                fontsize=9,
-                color=COLORS['red'],
+                fontsize=8,
+                color='white',
                 weight='bold',
-                va='center'
+                va='center',
+                bbox=dict(
+                    boxstyle='round,pad=0.2',
+                    facecolor=COLORS['stop_loss'],
+                    edgecolor='none',
+                    alpha=0.85
+                ),
+                zorder=5
             )
 
-    # 2. Draw take profit zones (green boxes with graduated transparency)
+    # -- TAKE PROFIT ZONE (green, full-width overlay on chart) --
     if setup.scaled_exits and show_boxes:
-        for i, tp in enumerate(setup.scaled_exits):
-            alpha = 0.12 + (i * 0.04)  # Gradually darker: 0.12 -> 0.28
-            if is_long:
-                tp_bottom = setup.scaled_exits[i-1] if i > 0 else setup.entry_price
-                tp_top = tp
-            else:  # SHORT
-                tp_top = setup.scaled_exits[i-1] if i > 0 else setup.entry_price
-                tp_bottom = tp
-            draw_trade_setup_box(ax, tp_top, tp_bottom, x_start_num, x_end_num, 'take_profit', alpha=alpha)
+        if is_long:
+            tp_bottom, tp_top = setup.entry_price, setup.scaled_exits[-1]
+        else:
+            tp_top, tp_bottom = setup.entry_price, setup.scaled_exits[-1]
 
-    # 3. Draw entry line (bold white)
-    ax.hlines(
-        setup.entry_price, x_start_num, x_end_num,
-        colors='white',
-        linewidth=3,
-        alpha=1.0
-    )
+        ax.axhspan(tp_bottom, tp_top,
+                    facecolor=COLORS['take_profit'], alpha=0.06, zorder=0)
+
+    # -- ENTRY LINE (white, full width, prominent) --
+    ax.axhline(y=setup.entry_price, color=COLORS['entry'],
+                linewidth=1.8, alpha=0.9, zorder=2)
+
     if show_labels:
         ax.annotate(
             f"ENTRY {format_price(setup.entry_price)}",
-            xy=(x_end_num, setup.entry_price),
-            xytext=(5, 0),
+            xy=(1.0, setup.entry_price),
+            xycoords=('axes fraction', 'data'),
+            xytext=(6, 0),
             textcoords='offset points',
-            fontsize=10,
-            color='white',
+            fontsize=8,
+            color=COLORS['background'],
             weight='bold',
-            va='center'
+            va='center',
+            bbox=dict(
+                boxstyle='round,pad=0.2',
+                facecolor=COLORS['entry'],
+                edgecolor='none',
+                alpha=0.9
+            ),
+            zorder=5
         )
 
-    # 4. Draw scaled entry levels (dashed blue lines)
+    # -- SCALED ENTRY LEVELS (dashed, full width) --
     if setup.scaled_entries and show_levels:
-        draw_scaled_levels(ax, setup.scaled_entries, x_start_num, x_end_num, 'entry', show_labels)
+        for i, level in enumerate(setup.scaled_entries[1:], start=1):
+            alpha = 0.5 - (i * 0.08)
+            ax.axhline(y=level, color=COLORS['blue'],
+                        linewidth=0.6, alpha=max(alpha, 0.2),
+                        linestyle='--', zorder=1)
+            if show_labels:
+                ax.annotate(
+                    f"E{i+1}",
+                    xy=(1.0, level),
+                    xycoords=('axes fraction', 'data'),
+                    xytext=(6, 0),
+                    textcoords='offset points',
+                    fontsize=7,
+                    color=COLORS['background'],
+                    weight='bold',
+                    va='center',
+                    bbox=dict(
+                        boxstyle='round,pad=0.15',
+                        facecolor=COLORS['blue'],
+                        edgecolor='none',
+                        alpha=max(alpha, 0.3)
+                    ),
+                    zorder=5
+                )
 
-    # 5. Draw scaled exit levels (dashed green lines)
+    # -- SCALED EXIT LEVELS (dashed, full width) --
     if setup.scaled_exits and show_levels:
-        draw_scaled_levels(ax, setup.scaled_exits, x_start_num, x_end_num, 'exit', show_labels)
+        for i, level in enumerate(setup.scaled_exits):
+            alpha = 0.5 - (i * 0.06)
+            ax.axhline(y=level, color=COLORS['take_profit'],
+                        linewidth=0.6, alpha=max(alpha, 0.2),
+                        linestyle='--', zorder=1)
+            if show_labels:
+                ax.annotate(
+                    f"TP{i+1}",
+                    xy=(1.0, level),
+                    xycoords=('axes fraction', 'data'),
+                    xytext=(6, 0),
+                    textcoords='offset points',
+                    fontsize=7,
+                    color=COLORS['background'],
+                    weight='bold',
+                    va='center',
+                    bbox=dict(
+                        boxstyle='round,pad=0.15',
+                        facecolor=COLORS['take_profit'],
+                        edgecolor='none',
+                        alpha=max(alpha, 0.3)
+                    ),
+                    zorder=5
+                )
 
-    # 6. Add R:R annotation
+    # -- R:R BADGE (centered in chart, inside TP zone) --
     if setup.stop_loss and setup.scaled_exits:
         risk = abs(setup.entry_price - setup.stop_loss)
         reward = abs(setup.scaled_exits[-1] - setup.entry_price)
         rr = reward / risk if risk > 0 else 0
 
-        # Position annotation near entry
-        y_offset = 15 if is_long else -15
+        # Place in middle of TP zone, centered horizontally
+        if is_long:
+            badge_y = setup.entry_price + (setup.scaled_exits[-1] - setup.entry_price) * 0.45
+        else:
+            badge_y = setup.entry_price - (setup.entry_price - setup.scaled_exits[-1]) * 0.45
+
         ax.annotate(
             f"R:R {rr:.1f}:1",
-            xy=(x_start, setup.entry_price),
-            xytext=(10, y_offset),
-            textcoords='offset points',
-            fontsize=11,
-            color=COLORS['orange'],
+            xy=(0.75, badge_y),
+            xycoords=('axes fraction', 'data'),
+            fontsize=12,
+            color=COLORS['rr_badge'],
             weight='bold',
-            bbox=dict(boxstyle='round,pad=0.3', facecolor=COLORS['background'], edgecolor=COLORS['orange'], alpha=0.8)
+            ha='center',
+            va='center',
+            bbox=dict(
+                boxstyle='round,pad=0.4',
+                facecolor=COLORS['background'],
+                edgecolor=COLORS['rr_badge'],
+                linewidth=1.5,
+                alpha=0.92
+            ),
+            zorder=6
         )
 
-    # 7. Add direction indicator
-    direction_color = COLORS['green'] if is_long else COLORS['red']
+    # -- DIRECTION TAG (centered in SL zone) --
+    direction_color = COLORS['take_profit'] if is_long else COLORS['stop_loss']
+    if is_long:
+        dir_y = setup.entry_price - abs(setup.entry_price - setup.stop_loss) * 0.45
+    else:
+        dir_y = setup.entry_price + abs(setup.stop_loss - setup.entry_price) * 0.45
+
     ax.annotate(
         setup.direction.upper(),
-        xy=(x_start, setup.entry_price),
-        xytext=(10, -15 if is_long else 15),
-        textcoords='offset points',
-        fontsize=12,
+        xy=(0.75, dir_y),
+        xycoords=('axes fraction', 'data'),
+        fontsize=11,
         color=direction_color,
-        weight='bold'
+        weight='bold',
+        ha='center',
+        va='center',
+        zorder=6
     )

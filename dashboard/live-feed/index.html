@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Feed | Hyperliquid Trading</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <h1>Live Feed</h1>
+                <span class="subtitle">Aggregated Log Streaming</span>
+            </div>
+            <div class="header-right">
+                <div class="status-indicator" id="status-indicator">
+                    <span class="status-dot" id="status-dot"></span>
+                    <span class="status-text" id="status-text">Connecting</span>
+                </div>
+                <div class="entry-count" id="entry-count">0 entries</div>
+                <a href="/dashboard/" class="nav-link">Dashboard</a>
+            </div>
+        </header>
+
+        <!-- Controls -->
+        <div class="controls">
+            <div class="filter-group">
+                <button class="filter-btn active" data-source="ALL" onclick="setFilter('ALL')">ALL</button>
+                <button class="filter-btn" data-source="HL" onclick="setFilter('HL')">
+                    <span class="filter-dot hl"></span>HL
+                </button>
+                <button class="filter-btn" data-source="BN" onclick="setFilter('BN')">
+                    <span class="filter-dot bn"></span>BN
+                </button>
+                <button class="filter-btn" data-source="MM" onclick="setFilter('MM')">
+                    <span class="filter-dot mm"></span>MM
+                </button>
+                <button class="filter-btn" data-source="CL" onclick="setFilter('CL')">
+                    <span class="filter-dot cl"></span>CL
+                </button>
+                <button class="filter-btn" data-source="SYS" onclick="setFilter('SYS')">
+                    <span class="filter-dot sys"></span>SYS
+                </button>
+                <button class="filter-btn" data-source="OUT" onclick="setFilter('OUT')">
+                    <span class="filter-dot out"></span>OUT
+                </button>
+            </div>
+            <div class="search-group">
+                <input type="text" id="search-input" class="search-input" placeholder="Search logs..." oninput="applyFilters()">
+                <button class="pause-btn" id="pause-btn" onclick="togglePause()">Pause</button>
+                <button class="clear-btn" onclick="clearLogs()">Clear</button>
+            </div>
+        </div>
+
+        <!-- Log Container -->
+        <div class="log-card">
+            <div class="log-container" id="log-container">
+                <div class="log-empty" id="log-empty">Waiting for log entries...</div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Live Feed Server -- SSE streaming from log files. Auto-reconnects on disconnect.</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

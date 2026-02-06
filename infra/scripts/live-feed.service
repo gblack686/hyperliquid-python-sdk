@@ -1,0 +1,34 @@
+[Unit]
+Description=Live Feed SSE Server
+Documentation=https://github.com/hyperliquid-dex/hyperliquid-python-sdk
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+
+# Working directory
+WorkingDirectory=/home/ubuntu/hyperliquid-python-sdk
+
+# Environment
+Environment=PATH=/home/ubuntu/hyperliquid-python-sdk/venv/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/home/ubuntu/hyperliquid-python-sdk/.env
+
+# Command to run
+ExecStart=/home/ubuntu/hyperliquid-python-sdk/venv/bin/uvicorn scripts.live_feed_server:app --host 127.0.0.1 --port 8099 --workers 1
+
+# Restart on failure
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=append:/home/ubuntu/hyperliquid-python-sdk/logs/live_feed_server.log
+StandardError=append:/home/ubuntu/hyperliquid-python-sdk/logs/live_feed_server.log
+
+# Resource limits (lightweight)
+MemoryMax=256M
+CPUQuota=25%
+
+[Install]
+WantedBy=multi-user.target

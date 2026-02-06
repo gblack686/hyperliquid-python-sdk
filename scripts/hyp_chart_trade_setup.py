@@ -49,10 +49,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from quantpylib.wrappers.hyperliquid import Hyperliquid
 from chart_utils import (
-    setup_dark_style, COLORS, save_chart, format_price,
+    setup_dark_style, COLORS, save_chart, format_price, plot_candlestick,
     TradeSetup, calculate_scaled_entries, calculate_scaled_exits, draw_trade_setup
 )
-from matplotlib.patches import Rectangle
 
 INTERVAL_MS = {
     '1m': 60 * 1000, '5m': 5 * 60 * 1000, '15m': 15 * 60 * 1000,
@@ -60,30 +59,6 @@ INTERVAL_MS = {
     '4h': 4 * 60 * 60 * 1000, '8h': 8 * 60 * 60 * 1000, '12h': 12 * 60 * 60 * 1000,
     '1d': 24 * 60 * 60 * 1000, '3d': 3 * 24 * 60 * 60 * 1000, '1w': 7 * 24 * 60 * 60 * 1000,
 }
-
-
-def plot_candlestick(ax, dates, opens, highs, lows, closes, width=0.6):
-    """Plot candlestick chart on given axis."""
-    for i in range(len(dates)):
-        color = COLORS['green'] if closes[i] >= opens[i] else COLORS['red']
-
-        # Wick
-        ax.plot([dates[i], dates[i]], [lows[i], highs[i]], color=color, linewidth=0.8)
-
-        # Body
-        body_bottom = min(opens[i], closes[i])
-        body_height = abs(closes[i] - opens[i])
-
-        if body_height > 0:
-            rect = Rectangle(
-                (mdates.date2num(dates[i]) - width/2, body_bottom),
-                width, body_height,
-                facecolor=color, edgecolor=color
-            )
-            ax.add_patch(rect)
-        else:
-            # Doji - just a line
-            ax.plot([dates[i], dates[i]], [opens[i], closes[i]], color=color, linewidth=1.5)
 
 
 async def chart_trade_setup(
@@ -163,58 +138,56 @@ async def chart_trade_setup(
         # Create chart
         setup_dark_style()
         fig, ax = plt.subplots(figsize=(16, 10))
+        fig.patch.set_facecolor(COLORS['background'])
+        ax.set_facecolor(COLORS['background'])
 
-        # Title
+        # Title - clean, muted
         title = f'{ticker} {direction} Trade Setup - {timeframe}'
         if leverage:
             title += f' ({leverage}x)'
-        fig.suptitle(title, fontsize=14, fontweight='bold')
+        fig.suptitle(title, fontsize=13, fontweight='bold', color=COLORS['text'])
 
         # Plot candlesticks
-        # Calculate candle width based on timeframe
         candle_width = interval_ms / (24 * 60 * 60 * 1000) * 0.8
         plot_candlestick(ax, dates, opens, highs, lows, closes, width=candle_width)
 
-        # Trade setup starts at CURRENT time (last candle) and extends into the FUTURE
-        x_start = dates[-1]
-        # Calculate future time extension (20% of chart width into the future)
-        time_span = mdates.date2num(dates[-1]) - mdates.date2num(dates[0])
-        future_extension = time_span * 0.25
-        x_end_num = mdates.date2num(dates[-1]) + future_extension
+        # Draw trade setup overlay (spans full chart width via axhspan)
+        draw_trade_setup(ax, setup, dates[-1], dates[-1],
+                         show_boxes=True, show_levels=True, show_labels=True)
 
-        # Draw trade setup overlay (pass numeric end for future extension)
-        draw_trade_setup(ax, setup, x_start, x_end_num, show_boxes=True, show_levels=True, show_labels=True)
-
-        # Set axis limits with padding for labels
+        # Y-axis: fit candles + all trade levels
         all_prices = list(highs) + list(lows) + [entry_price, stop_price] + scaled_exits
         price_min = min(all_prices) * 0.98
         price_max = max(all_prices) * 1.02
         ax.set_ylim(price_min, price_max)
 
-        # Extend x-axis for labels
-        x_margin = (mdates.date2num(dates[-1]) - mdates.date2num(dates[0])) * 0.15
+        # X-axis: small margin for right-edge badges only
+        time_span = mdates.date2num(dates[-1]) - mdates.date2num(dates[0])
+        x_margin = time_span * 0.08
         ax.set_xlim(mdates.date2num(dates[0]), mdates.date2num(dates[-1]) + x_margin)
 
-        # Format axes
-        ax.set_ylabel('Price', fontsize=11)
-        ax.set_xlabel('Time', fontsize=11)
+        # Clean axis formatting
+        ax.set_ylabel('Price', fontsize=10, color=COLORS['text_muted'])
+        ax.set_xlabel('')
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d %H:%M'))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        plt.xticks(rotation=45)
-        ax.grid(True, alpha=0.3)
+        plt.xticks(rotation=0, fontsize=8)
+        ax.tick_params(axis='both', colors=COLORS['text_muted'], length=0)
+        ax.grid(True, alpha=0.6, linewidth=0.5)
 
-        # Add current price annotation
+        # Current price dotted line + right-edge badge
         current_price = closes[-1]
-        ax.axhline(y=current_price, color=COLORS['text'], linestyle=':', alpha=0.5)
+        ax.axhline(y=current_price, color=COLORS['text_muted'],
+                    linestyle=':', linewidth=0.7, alpha=0.5)
         ax.annotate(
             f"Current: {format_price(current_price)}",
             xy=(1.01, current_price),
             xycoords=('axes fraction', 'data'),
-            fontsize=9,
-            color=COLORS['text']
+            fontsize=8,
+            color=COLORS['text_muted']
         )
 
-        # Add trade info box
+        # Trade info box - position based on direction to avoid overlapping zones
         risk = abs(entry_price - stop_price)
         reward = abs(scaled_exits[-1] - entry_price)
         rr_ratio = reward / risk if risk > 0 else 0
@@ -232,18 +205,20 @@ async def chart_trade_setup(
         if leverage > 0:
             info_text += f"\nLeverage: {leverage}x"
 
-        # Position info box in upper left or upper right based on direction
-        box_x = 0.02 if direction == 'SHORT' else 0.02
+        # Smart box placement: upper-left for LONG (SL below), lower-left for SHORT (SL above)
+        box_y = 0.98 if direction == 'LONG' else 0.02
+        box_va = 'top' if direction == 'LONG' else 'bottom'
         ax.text(
-            box_x, 0.98, info_text,
+            0.02, box_y, info_text,
             transform=ax.transAxes,
-            fontsize=10,
-            verticalalignment='top',
+            fontsize=9,
+            verticalalignment=box_va,
+            color=COLORS['text'],
             bbox=dict(
                 boxstyle='round,pad=0.5',
                 facecolor=COLORS['background'],
                 edgecolor=COLORS['grid'],
-                alpha=0.9
+                alpha=0.92
             )
         )
 
