@@ -212,6 +212,40 @@ class PerformanceAnalyzer:
         df = pd.DataFrame(results)
         return df
 
+    def cost_attribution(
+        self,
+        portfolio_df: pd.DataFrame,
+    ) -> Dict[str, float]:
+        """
+        Shortcut to CostAttributionAnalyzer for Sharpe decomposition.
+
+        Args:
+            portfolio_df: DataFrame with capital_ret, comm_penalty, exec_penalty columns
+
+        Returns:
+            Dict with sharpe_costless, sharpe_costful, costdrag, etc.
+        """
+        from .cost_attribution import CostAttributionAnalyzer
+        analyzer = CostAttributionAnalyzer(granularity=self.granularity)
+        return analyzer.analyze(portfolio_df)
+
+    def alpha_correlation(
+        self,
+        strategy_returns: Dict[str, pd.Series],
+    ) -> Dict[str, Any]:
+        """
+        Shortcut to AlphaCorrelationAnalyzer for cross-strategy analysis.
+
+        Args:
+            strategy_returns: Dict of strategy_name -> return series
+
+        Returns:
+            Dict with corr_matrix, eigenvalues, diversification_ratio, clustered_pairs
+        """
+        from .alpha_correlation import AlphaCorrelationAnalyzer
+        analyzer = AlphaCorrelationAnalyzer()
+        return analyzer.compute(strategy_returns)
+
     @staticmethod
     def returns_from_pnl_records(
         records: List[Dict[str, Any]],

@@ -319,6 +319,135 @@ class QuantBacktester:
             logger.error(f"Hypothesis tests failed: {e}")
             return {"error": str(e)}
 
+    def run_cost_attribution(
+        self,
+        results: Optional[Dict[str, Any]] = None,
+        granularity: str = "hourly",
+    ) -> Dict[str, float]:
+        """
+        Run cost attribution (Sharpe decomposition) on backtest results.
+
+        Args:
+            results: Backtest results dict (uses last_results if None)
+            granularity: Time granularity for annualization
+
+        Returns:
+            Dict with sharpe_costless, sharpe_costful, costdrag, etc.
+        """
+        from .cost_attribution import CostAttributionAnalyzer
+
+        results = results or self.last_results
+        if not results or "portfolio_df" not in results:
+            return {"error": "No backtest results available"}
+
+        analyzer = CostAttributionAnalyzer(granularity=granularity)
+        return analyzer.analyze(results["portfolio_df"])
+
+    def run_factor_analysis(
+        self,
+        results: Optional[Dict[str, Any]] = None,
+        market_returns: Optional[pd.Series] = None,
+        granularity: str = "hourly",
+    ) -> Dict[str, Any]:
+        """
+        Run CAPM factor analysis on backtest results.
+
+        Args:
+            results: Backtest results dict (uses last_results if None)
+            market_returns: Market benchmark returns. If None, uses
+                           equal-weight of all instruments.
+            granularity: Time granularity for annualization
+
+        Returns:
+            Dict with alpha, beta, r_squared, information_ratio, etc.
+        """
+        from .factor_analysis import FactorAnalyzer
+
+        results = results or self.last_results
+        if not results or "portfolio_df" not in results:
+            return {"error": "No backtest results available"}
+
+        pdf = results["portfolio_df"]
+        if "capital_ret" in pdf.columns:
+            strat_ret = pdf["capital_ret"].dropna()
+        elif "capital" in pdf.columns:
+            strat_ret = pdf["capital"].pct_change().dropna()
+        else:
+            return {"error": "Cannot extract strategy returns from portfolio_df"}
+
+        if market_returns is None:
+            # Approximate market return from equal-weight of instruments
+            ret_cols = [c for c in pdf.columns if c.startswith("ret_")]
+            if ret_cols:
+                market_returns = pdf[ret_cols].mean(axis=1).dropna()
+            else:
+                # Fallback: use zero (pure alpha test)
+                market_returns = pd.Series(0, index=strat_ret.index)
+
+        analyzer = FactorAnalyzer(granularity=granularity)
+        return analyzer.analyze(strat_ret, market_returns)
+
+    def run_amalgapha(
+        self,
+        strategy_results_list: List[Dict[str, Any]],
+        strategy_names: Optional[List[str]] = None,
+        risk_aversion: float = 1.0,
+        rolling_window: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run Amalgapha portfolio optimization across multiple strategies.
+
+        Args:
+            strategy_results_list: List of backtest result dicts
+            strategy_names: Optional names for each strategy
+            risk_aversion: Risk aversion coefficient (higher = more conservative)
+            rolling_window: If set, compute time-varying allocations
+
+        Returns:
+            Dict with strat_allocations, combined_returns, combined_metrics
+        """
+        from .amalgapha import Amalgapha
+
+        amalg = Amalgapha.from_backtest_results(
+            results_list=strategy_results_list,
+            strategy_names=strategy_names,
+            risk_aversion=risk_aversion,
+            rolling_window=rolling_window,
+        )
+        return amalg.optimize()
+
+    def run_bar_permutation_test(
+        self,
+        alpha_cls: Any,
+        alpha_kwargs: Dict[str, Any],
+        candle_dfs: Dict[str, pd.DataFrame],
+        num_permutations: int = 100,
+        metric: str = "sharpe",
+    ) -> Dict[str, Any]:
+        """
+        Run bar permutation test for statistical significance.
+
+        Args:
+            alpha_cls: Strategy class (not instance)
+            alpha_kwargs: Constructor kwargs (without dfs)
+            candle_dfs: Dict of instrument -> OHLCV DataFrame
+            num_permutations: Number of permutations
+            metric: Metric to test ("sharpe", "sortino", "cagr")
+
+        Returns:
+            Dict with p_value, null_distribution, significance flags
+        """
+        from .advanced_hypothesis import AdvancedHypothesisTester
+
+        tester = AdvancedHypothesisTester()
+        return tester.run_bar_permutation_test(
+            alpha_cls=alpha_cls,
+            alpha_kwargs=alpha_kwargs,
+            candle_dfs=candle_dfs,
+            num_permutations=num_permutations,
+            metric=metric,
+        )
+
     def _genetic_not_available(
         self, formula: str, tickers: List[str]
     ) -> Dict[str, Any]:
